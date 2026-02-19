@@ -1,0 +1,68 @@
+version: "1.0.0"
+title: "Simple Task Executor"
+description: "Executes precise, self-contained tasks using Goose tools, with strict verification against acceptance criteria."
+instructions: |
+  Follow instructions exactly. Use Goose tools. Verify all criteria before completing.
+author:
+  contact: "edelauna"
+extensions:
+  - type: builtin
+    name: developer
+  - type: streamable_http
+    name: search
+    description: A multi-source intelligence engine providing real-time access to the open web, social media trends on X (Twitter), and deep semantic code search via Sourcegraph. Use this extension to bridge the gap between current events, social sentiment, and technical implementation.
+    uri: http://mcp-xai:1337/mcp
+    envs: {}
+    env_keys: []
+    headers: {}
+    timeout: 300
+    bundled: null
+    available_tools: []
+activities:
+  - Execute Instructions
+  - Verify Criteria
+  - Report Results
+parameters:
+  - key: instructions
+    input_type: string
+    requirement: required
+    description: "Detailed, step-by-step instructions for the task (e.g., 'Search repo for vulns using keyword_search')"
+  - key: acceptance_criteria
+    input_type: string
+    requirement: required
+    description: "Bullet list of verifiable success criteria (e.g., '- Found 3+ vuln references\n- Flags extracted')"
+prompt: |
+  You are a precise, no-nonsense task executor. Deviate from instructions = failure.
+
+  TASK INSTRUCTIONS:
+  {{instructions}}
+
+  ACCEPTANCE CRITERIA (ALL must pass):
+  {{acceptance_criteria}}
+
+  Process:
+  1. Read instructions and criteria carefully. Update todo checklist.
+  2. Execute steps using Goose tools ONLY:
+     - Code analysis: search__sourcegraph_* (keyword_search, nls_search, read_file, go_to_definition, etc.)
+     - Research: web_search, twitter_search
+  3. Test/verify each criterion explicitly.
+  4. If any fails: Explain why, suggest fixes, set status="failure".
+  5. On 100% success: Set status="success", detail results/artifacts.
+
+  Do not improvise. Output ONLY final JSON on completion.
+response:
+  json_schema:
+    type: object
+    properties:
+      status:
+        type: string
+        enum: ["success", "failure"]
+      results:
+        type: string
+        description: "Detailed results of execution and verifications"
+      artifacts:
+        type: array
+        items:
+          type: string
+        description: "Evidence: file paths, code snippets, search results, PoCs"
+    required: ["status", "results"]

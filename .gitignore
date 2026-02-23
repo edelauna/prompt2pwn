@@ -1,0 +1,11 @@
+workspaces/*
+!workspaces/.gitkeep
+
+.env
+
+.goose-staging
+
+out
+
+cov_profile
+coverage

@@ -1,0 +1,389 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPTransport } from "@hono/mcp";
+import { Context, Hono } from "hono";
+import { z } from "zod";
+
+const PORT = Deno.env.get("PORT") || "1337";
+const MODEL = Deno.env.get("MODEL") || "grok-4-1-fast-reasoning";
+
+interface JSONSchema {
+  type?: string;
+  description?: string;
+  properties?: Record<string, JSONSchema>;
+  required?: string[];
+  items?: JSONSchema;
+  additionalProperties?: boolean;
+}
+
+interface Tool {
+  name: string;
+  description: string;
+  inputSchema: JSONSchema;
+}
+
+function jsonSchemaToZod(schema: JSONSchema): z.ZodTypeAny {
+  const desc = schema.description || "";
+  switch (schema.type) {
+    case "string":
+      return z.string().describe(desc);
+    case "boolean":
+      return z.boolean().describe(desc);
+    case "integer":
+      return z.number().int().describe(desc);
+    case "number":
+      return z.number().describe(desc);
+    case "array":
+      return z.array(schema.items ? jsonSchemaToZod(schema.items) : z.any())
+        .describe(desc);
+    case "object": {
+      const schemaProps = schema.properties || {};
+      const requiredKeys = schema.required || [];
+      const objProps: Record<string, z.ZodTypeAny> = {};
+      for (const [key, propSchema] of Object.entries(schemaProps)) {
+        let propZod = jsonSchemaToZod(propSchema);
+        if (!requiredKeys.includes(key)) {
+          propZod = propZod.optional();
+        }
+        objProps[key] = propZod;
+      }
+      const obj = z.object(objProps).describe(desc);
+      return schema.additionalProperties === false
+        ? obj.strict()
+        : obj.passthrough();
+    }
+    default:
+      return z.any().describe(desc);
+  }
+}
+
+const API_KEY = Deno.env.get("XAI_API_KEY");
+
+const SOURCEGRAPH_TOKEN = Deno.env.get("SOURCEGRAPH_TOKEN");
+if (!SOURCEGRAPH_TOKEN) {
+  console.warn(
+    "SOURCEGRAPH_TOKEN not set; Sourcegraph tools will be unavailable",
+  );
+}
+
+let sgTools: Tool[] = [];
+if (SOURCEGRAPH_TOKEN) {
+  sgTools = await loadSgTools();
+}
+
+async function callXaiApi(
+  query: string,
+  toolType: string,
+  chat_history: Array<{ role: string; content: string }> = [],
+  options: {
+    allowed_domains?: string[];
+    excluded_domains?: string[];
+    allowed_x_handles?: string[];
+    excluded_x_handles?: string[];
+    from_date?: string;
+    to_date?: string;
+    enable_image_understanding?: boolean;
+    enable_video_understanding?: boolean;
+  } = {},
+) {
+  const response = await fetch("https://api.x.ai/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      input: [
+        ...chat_history,
+        {
+          role: "user",
+          content: query,
+        },
+      ],
+      tools: [
+        {
+          type: toolType,
+          ...options,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data;
+}
+
+console.log("Starting MCP server...");
+
+async function loadSgTools(): Promise<Tool[]> {
+  if (!SOURCEGRAPH_TOKEN) return [];
+  try {
+    const toolsListBody = JSON.stringify({
+      jsonrpc: "2.0",
+      id: "tools-list",
+      method: "tools/list",
+    });
+    const resp = await fetch("https://sourcegraph.com/.api/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `token ${SOURCEGRAPH_TOKEN}`,
+      },
+      body: toolsListBody,
+    });
+    if (!resp.ok) throw new Error(`Fetch tools failed: ${resp.status}`);
+    const text = await resp.text();
+    const lines = text.split("\n");
+    let jsonData = null;
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        jsonData = line.slice(6);
+        break;
+      }
+    }
+    if (!jsonData) throw new Error("No data in response");
+    const data = JSON.parse(jsonData);
+    const tools = data.result?.tools || [];
+    console.log(`Loaded ${tools.length} Sourcegraph tools`);
+    return tools;
+  } catch (e) {
+    console.error("Failed to load Sourcegraph tools:", e);
+    return [];
+  }
+}
+
+const app = new Hono();
+
+app.all("/mcp", async (c: Context) => {
+  const mcpServer = new McpServer({
+    name: "xai-server",
+    version: "0.1.0",
+    description:
+      "MCP server providing web search and X (Twitter) search tools powered by xAI API",
+  });
+
+  mcpServer.registerTool(
+    "web_search",
+    {
+      description:
+        "Perform web searches to gather current information, research topics, or browse the internet. Use this tool when you need real-time data, recent news, or information not available in your training data. Supports domain filtering and image analysis.",
+      inputSchema: z.object({
+        query: z.string().describe(
+          "The search query for web research. Use specific keywords and be clear about what information you need.",
+        ),
+        chat_history: z.array(
+          z.object({ role: z.string(), content: z.string() }),
+        ).describe("Previous chat messages for context"),
+        allowed_domains: z.array(z.string()).max(5).optional().describe(
+          "Only search within specific domains (max 5)",
+        ),
+        excluded_domains: z.array(z.string()).max(5).optional().describe(
+          "Exclude specific domains from search (max 5)",
+        ),
+        enable_image_understanding: z.boolean().optional().describe(
+          "Enable analysis of images found during browsing",
+        ),
+      }),
+    },
+    async ({
+      query,
+      chat_history = [],
+      allowed_domains,
+      excluded_domains,
+      enable_image_understanding,
+    }: {
+      query: string;
+      chat_history?: Array<{ role: string; content: string }>;
+      allowed_domains?: string[];
+      excluded_domains?: string[];
+      enable_image_understanding?: boolean;
+    }) => {
+      try {
+        const result = await callXaiApi(query, "web_search", chat_history, {
+          allowed_domains,
+          excluded_domains,
+          enable_image_understanding,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: ${(error as Error).message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  mcpServer.registerTool(
+    "twitter_search",
+    {
+      description:
+        "Search for discussions and posts on X (formerly Twitter). Use this tool to find real-time conversations, opinions, and trending topics on social media.",
+      inputSchema: z.object({
+        query: z.string().describe(
+          "The search query for X (Twitter) discussions. Include keywords, hashtags, or usernames to find relevant posts.",
+        ),
+        chat_history: z.array(
+          z.object({ role: z.string(), content: z.string() }),
+        ).describe("Previous chat messages for context"),
+        allowed_x_handles: z.array(z.string()).max(10).optional().describe(
+          "Only consider posts from specific X handles (max 10)",
+        ),
+        excluded_x_handles: z.array(z.string()).max(10).optional().describe(
+          "Exclude posts from specific X handles (max 10)",
+        ),
+        from_date: z.string().optional().describe(
+          "Start date for search range (ISO8601 format)",
+        ),
+        to_date: z.string().optional().describe(
+          "End date for search range (ISO8601 format)",
+        ),
+        enable_image_understanding: z.boolean().optional().describe(
+          "Enable analysis of images in posts",
+        ),
+        enable_video_understanding: z.boolean().optional().describe(
+          "Enable analysis of videos in posts",
+        ),
+      }),
+    },
+    async ({
+      query,
+      chat_history = [],
+      allowed_x_handles,
+      excluded_x_handles,
+      from_date,
+      to_date,
+      enable_image_understanding,
+      enable_video_understanding,
+    }: {
+      query: string;
+      chat_history?: Array<{ role: string; content: string }>;
+      allowed_x_handles?: string[];
+      excluded_x_handles?: string[];
+      from_date?: string;
+      to_date?: string;
+      enable_image_understanding?: boolean;
+      enable_video_understanding?: boolean;
+    }) => {
+      try {
+        const result = await callXaiApi(query, "x_search", chat_history, {
+          allowed_x_handles,
+          excluded_x_handles,
+          from_date,
+          to_date,
+          enable_image_understanding,
+          enable_video_understanding,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: ${(error as Error).message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  for (const tool of sgTools) {
+    const zodSchema = jsonSchemaToZod(tool.inputSchema);
+    mcpServer.registerTool(`sourcegraph_${tool.name}`, {
+      description: tool.description,
+      inputSchema: zodSchema,
+    }, async (input: Record<string, unknown>) => {
+      try {
+        const callBody = JSON.stringify({
+          jsonrpc: "2.0",
+          id: `sg-call-${tool.name}`,
+          method: "tools/call",
+          params: { name: tool.name, arguments: input },
+        });
+        const resp = await fetch("https://sourcegraph.com/.api/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `token ${SOURCEGRAPH_TOKEN}`,
+          },
+          body: callBody,
+        });
+        if (!resp.ok) throw new Error(`Tool call failed: ${resp.status}`);
+        // deno-lint-ignore no-explicit-any
+        const content: any[] = [];
+        const reader = resp.body?.getReader();
+        if (!reader) throw new Error("No body");
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const dataStr = line.slice(6);
+                const data = JSON.parse(dataStr);
+                if (data.result && data.result.content) {
+                  content.push(...data.result.content);
+                }
+              } catch {
+                // Ignore parsing errors for individual lines
+              }
+            }
+          }
+        }
+        return {
+          content,
+        };
+      } catch (e) {
+        return {
+          content: [{
+            type: "text",
+            text: `Error calling sourcegraph_${tool.name}: ${
+              (e as Error).message
+            }`,
+          }],
+          isError: true,
+        };
+      }
+    });
+  }
+
+  const transport = new StreamableHTTPTransport();
+  await mcpServer.connect(transport);
+  return transport.handleRequest(c);
+});
+
+app.get("/mcp/health", (c: Context) => c.text("OK"));
+
+console.log(`Starting HTTP server on 0.0.0.0:${PORT}`);
+Deno.serve({ hostname: "0.0.0.0", port: parseInt(PORT) }, app.fetch);
+console.error(`xAI MCP server running on port ${PORT}`);

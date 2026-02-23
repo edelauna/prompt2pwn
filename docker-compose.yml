@@ -1,0 +1,14 @@
+services:
+  mcp-xai:
+    container_name: mcp-xai-global
+    image: edelauna/mcp-xai:latest
+    build:
+      context: ./mcp-xai
+    ports:
+      - "1337:1337"
+    env_file: .env
+    restart: unless-stopped
+
+networks:
+  default:
+    name: goose-shared-net

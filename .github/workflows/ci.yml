@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: 1.47.2
+          cache: true
+      - run: deno task check
+      - run: deno task test
+      - run: deno task lint
+      - run: deno fmt --check
+      - name: Coverage
+        run: deno coverage cov_profile --lcov --output coverage/lcov.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+
+  compile:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: 1.47.2
+          cache: true
+      - name: Compile
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            deno task compile:linux
+            mv out/prompt2pwn prompt2pwn-linux-amd64
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            deno task compile:darwin
+            mv out/prompt2pwn prompt2pwn-darwin-arm64
+          fi
+        shell: bash
+      - name: Compile Windows
+        if: matrix.os == 'windows-latest'
+        run: deno task compile:win
+        shell: pwsh
+      - name: Rename Windows
+        if: matrix.os == 'windows-latest'
+        run: mv out/prompt2pwn.exe prompt2pwn-windows-amd64.exe
+        shell: pwsh
+      - name: Verify binaries
+        run: |
+          file prompt2pwn-* || ls -la prompt2pwn*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prompt2pwn-${{ matrix.os == 'ubuntu-latest' && 'linux-amd64' || matrix.os == 'macos-latest' && 'darwin-arm64' || 'windows-amd64' }}
+          path: prompt2pwn-*
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      docker:
+        image: docker:dind
+        options: >-
+          --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v1
+      - name: Start services
+        run: docker compose up -d
+      - name: Run preflight
+        run: deno task start preflight
+      - name: Compile and run launch
+        run: deno task compile:linux && mv out/prompt2pwn prompt2pwn-linux-amd64 && ./prompt2pwn-linux-amd64 launch --yes --no-priv info
+
+  docker-release:
+    needs: [test, compile]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Goose DinD
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.goose
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            edelauna/goose-dind:${{ github.ref_name }}
+            edelauna/goose-dind:latest
+
+      - name: Build and push MCP XAI
+        uses: docker/build-push-action@v5
+        with:
+          context: ./mcp-xai
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            edelauna/mcp-xai:${{ github.ref_name }}
+            edelauna/mcp-xai:latest
+
+  release:
+    needs: [test, compile]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: prompt2pwn-linux-amd64
+          path: .
+      - name: Download Darwin binary
+        uses: actions/download-artifact@v4
+        with:
+          name: prompt2pwn-darwin-arm64
+          path: .
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: prompt2pwn-windows-amd64
+          path: .
+      - name: List assets
+        run: ls -la prompt2pwn-* || true
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            prompt2pwn-linux-amd64
+            prompt2pwn-darwin-arm64
+            prompt2pwn-windows-amd64.exe

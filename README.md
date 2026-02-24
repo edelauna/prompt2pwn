@@ -90,12 +90,14 @@ deno task start
 
 ```mermaid
 graph TB
-  Host[Docker Host] --> Goose[Goose Container<br/>DinD + Goose AI]
-  Goose --> WS[/workspace]
+  Host --> Goose[Goose Container<br/>DinD + Goose AI]
+  Goose --> WS["/workspace"]
   Goose --> Vol[goose-configs Vol]
   Host --> MCP[MCP-XAI Sidecar]
-  MCP --> SG[Sourcegraph]
-  MCP --> Web[Web Search]
+  MCP --> SG["Source code search
+(by sourcegraph)"]
+  MCP --> Web["Web Search
+(by xai)"]
 ```
 
 ## Features

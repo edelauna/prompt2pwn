@@ -8,7 +8,7 @@ env with MCP sidecar for xAI models.
 ## Quick Start
 
 1. Install Docker.
-2. `curl -fsSL https://raw.githubusercontent.com/edelauna/prompt2pwn/main/install.sh | sh`
+2. `curl -fsSL https://raw.githubusercontent.com/edelauna/prompt2pwn/refs/heads/dev/install.sh | sh`
 3. `prompt2pwn launch --pwn-challenge \"Buffer overflow in login\" --pwn-target http://target:8080`
 
 ## CLI
@@ -72,11 +72,13 @@ file or environment.
 
 ## Installation
 
-**Recommended (One-liner)**:
+**Recommended**: See [Quick Start](#quick-start)
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/edelauna/prompt2pwn/main/install.sh | sh
-```
+**Windows**:
+
+Download the latest `prompt2pwn-windows-amd64.exe` from
+[GitHub Releases](https://github.com/edelauna/prompt2pwn/releases) and place it
+in a directory in your PATH.
 
 **Development**:
 

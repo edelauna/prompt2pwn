@@ -5,6 +5,8 @@
 Automate CTF pwn challenges using Goose AI workflows in Docker. Secure nested
 env with MCP sidecar for xAI models.
 
+![Demo](docs/use.gif)
+
 ## Quick Start
 
 1. Install Docker.

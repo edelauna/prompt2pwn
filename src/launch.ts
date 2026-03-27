@@ -18,6 +18,7 @@ export function showLaunchPreview(
       ["Workspace", workspacePath],
       ["Staging", stagingPath],
       ["Volume", volumeName],
+      ["Tool", options.tool || "goose"],
       ["Privileged", options.noPriv ? "No" : "Yes"],
       ["Launch File", options.launchFile || "None"],
       ["Provider", provider],
@@ -31,6 +32,7 @@ export function buildLaunchCmd(
   options: LaunchOptions,
   workspacePath: string,
   volumeName: string,
+  claudeVolumeName: string,
   dockerCacheVol: string,
   envPath: string,
   image: string,
@@ -53,11 +55,15 @@ export function buildLaunchCmd(
     "goose-shared-net",
     "-v",
     `${workspacePath}:/workspace`,
-    "-v",
-    `${volumeName}:/home/goose/.config/goose`,
-    "--env-file",
-    envPath,
   );
+  const tool = options.tool || "goose";
+  if (tool === "claude") {
+    baseCmd.push("-e", "TOOL=claude");
+    baseCmd.push("-v", `${claudeVolumeName}:/home/goose`);
+  } else {
+    baseCmd.push("-v", `${volumeName}:/home/goose/.config/goose`);
+  }
+  baseCmd.push("--env-file", envPath);
   if (options.launchFile) {
     baseCmd.push("-e", `GOOSE_LAUNCH_FILE=${options.launchFile}`);
     baseCmd.push("-v", `${dockerCacheVol}:/var/lib/docker`);

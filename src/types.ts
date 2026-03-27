@@ -4,11 +4,12 @@ export interface LaunchOptions {
   noPriv?: boolean;
   verbose?: boolean;
   yes?: boolean;
-  pwnChallenge?: string;
+  pwnObjective?: string;
   pwnTarget?: string;
   pwnInfo?: string;
   provider?: string;
   model?: string;
+  tool?: "goose" | "claude";
 }
 
 export interface AppConfig {

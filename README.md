@@ -11,7 +11,7 @@ env with MCP sidecar for xAI models.
 
 1. Install Docker.
 2. `curl -fsSL https://raw.githubusercontent.com/edelauna/prompt2pwn/refs/heads/dev/install.sh | sh`
-3. `prompt2pwn launch --pwn-challenge \"Buffer overflow in login\" --pwn-target http://target:8080`
+3. `prompt2pwn launch --pwn-objective \"Buffer overflow in login\" --pwn-target http://target:8080`
 
 ## CLI
 
@@ -21,7 +21,7 @@ prompt2pwn [preflight|down|launch] [options]
 
 **Launch**:
 
-- `--pwn-challenge <desc>`: CTF description
+- `--pwn-objective <desc>`: CTF description
 - `--pwn-target <url>`: Target
 - `--pwn-info <hints>`: Extra info
 - `--yes`: Skip prompts
@@ -51,7 +51,7 @@ tools.
 
 ```sh
 prompt2pwn launch  # Interactive CTF
-prompt2pwn launch --yes --pwn-challenge \"XSS vuln\"
+prompt2pwn launch --yes --pwn-objective \"XSS vuln\"
 prompt2pwn preflight
 prompt2pwn down
 ```

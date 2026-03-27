@@ -33,4 +33,16 @@ if [ -n "$GOOSE_LAUNCH_FILE" ]; then
     fi
 fi
 
-exec setpriv --reuid ${HOST_UID} --regid ${HOST_GID} --clear-groups goose "$@"
+# Drop privileges (unless called from root) - limits the ability of agents to rewrite network
+if [ "$TOOL" = "claude" ]; then
+  mkdir -p /home/goose/.local /home/goose/.cache /home/goose/.claude
+  chown -R ${HOST_UID}:${HOST_GID} /home/goose/.local /home/goose/.cache /home/goose/.claude
+else
+  chown -R ${HOST_UID}:${HOST_GID} /home/goose/.config/goose
+fi
+
+if [ "$TOOL" = "claude" ]; then
+  exec setpriv --reuid ${HOST_UID} --regid ${HOST_GID} --clear-groups claude "$@"
+else
+  exec setpriv --reuid ${HOST_UID} --regid ${HOST_GID} --clear-groups goose "$@"
+fi

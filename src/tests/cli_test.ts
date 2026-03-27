@@ -1,8 +1,13 @@
 import { assert, assertEquals } from "std/assert";
 import {
-  pullConfigFromVolume,
-  seedRecipes,
-  syncRecipesToVolume,
+  mergeClaudeProjectMcpConfig,
+  syncClaudeHomeVolume,
+  syncClaudeProjectMcpConfig,
+} from "../claude.ts";
+import {
+  pullConfigFromVolume as pullGooseConfigFromVolume,
+  seedRecipes as seedGooseRecipes,
+  syncRecipesToVolume as syncGooseRecipesToVolume,
 } from "../recipes.ts";
 import { buildLaunchCmd, showLaunchPreview } from "../launch.ts";
 import { LaunchOptions } from "../types.ts";
@@ -16,14 +21,14 @@ Deno.test("seedRecipes - no recipes", async () => {
     throw new Deno.errors.NotFound("not found");
   };
   try {
-    const result = await seedRecipes("/staging", "/root");
+    const result = await seedGooseRecipes("/staging", "/root");
     assertEquals(result, "");
   } finally {
     Deno.stat = originalStat;
   }
 });
 
-Deno.test("seedRecipes - staging has existing recipes", async () => {
+Deno.test("seedRecipes - always seeds bundled", async () => {
   const stagingPath = "/staging";
   const rootPath = "/root";
 
@@ -61,21 +66,38 @@ Deno.test("seedRecipes - staging has existing recipes", async () => {
     isSymlink: false,
   });
 
-  // seedRecipes in recipes.ts:13 calls walk which might be using stat or lstat
+  // seedRecipes checks existing staging recipes first, then external recipes.
   const originalStatStub = Deno.stat;
-  (Deno as any).stat = async () => ({
-    isFile: true,
-    isDirectory: false,
-    isSymlink: false,
-  });
+  (Deno as any).stat = async (path: string) => {
+    if (path === "/root/recipes") {
+      throw new Deno.errors.NotFound();
+    }
+    return {
+      isFile: true,
+      isDirectory: false,
+      isSymlink: false,
+    };
+  };
+
+  const originalReadTextFile = Deno.readTextFile;
+  (Deno as any).readTextFile = async () => "bundled content";
+
+  const originalWriteTextFile = Deno.writeTextFile;
+  (Deno as any).writeTextFile = async () => {};
+
+  const originalMkdir = Deno.mkdir;
+  (Deno as any).mkdir = async () => {};
 
   try {
-    const result = await seedRecipes(stagingPath, rootPath);
+    const result = await seedGooseRecipes(stagingPath, rootPath);
     assertEquals(result, "existing");
   } finally {
     (Deno as any).readDir = originalReadDir;
     (Deno as any).lstat = originalLstat;
     (Deno as any).stat = originalStatStub;
+    (Deno as any).readTextFile = originalReadTextFile;
+    (Deno as any).writeTextFile = originalWriteTextFile;
+    (Deno as any).mkdir = originalMkdir;
   }
 });
 
@@ -132,7 +154,7 @@ Deno.test("seedRecipes - external recipes", async () => {
   (Deno as any).mkdir = async () => {};
 
   try {
-    const result = await seedRecipes("/staging", "/root");
+    const result = await seedGooseRecipes("/staging", "/root");
     assertEquals(result, "external");
   } finally {
     (Deno as any).readDir = originalReadDir;
@@ -179,7 +201,7 @@ Deno.test("seedRecipes - bundled fallback", async () => {
   (Deno as any).mkdir = async () => {};
 
   try {
-    const result = await seedRecipes("/staging", "/root");
+    const result = await seedGooseRecipes("/staging", "/root");
     assertEquals(result, "bundled");
   } finally {
     (Deno as any).readDir = originalReadDir;
@@ -201,6 +223,7 @@ Deno.test("buildLaunchCmd - basic command", () => {
     options,
     "/workspace",
     "volume",
+    "/host/claude",
     "docker-vol",
     "/env",
     "image",
@@ -239,6 +262,7 @@ Deno.test("buildLaunchCmd - with launch file", () => {
     options,
     "/workspace",
     "volume",
+    "/host/claude",
     "docker-vol",
     "/env",
     "image",
@@ -260,6 +284,7 @@ Deno.test("buildLaunchCmd - privileged and no launch file", () => {
     options,
     "/workspace",
     "volume",
+    "/host/claude",
     "docker-vol",
     "/env",
     "image",
@@ -327,6 +352,7 @@ Deno.test("buildLaunchCmd - with CTF recipe args", () => {
     options,
     "/workspace",
     "volume",
+    "/host/claude",
     "docker-vol",
     "/env",
     "image",
@@ -335,7 +361,7 @@ Deno.test("buildLaunchCmd - with CTF recipe args", () => {
       "--recipe",
       "ctf-orchestrator",
       "--params",
-      "challenge_description=test",
+      "target=test",
     ],
   );
   assertEquals(cmd.slice(-5), [
@@ -343,8 +369,248 @@ Deno.test("buildLaunchCmd - with CTF recipe args", () => {
     "--recipe",
     "ctf-orchestrator",
     "--params",
-    "challenge_description=test",
+    "target=test",
   ]);
+});
+
+Deno.test("buildLaunchCmd - claude uses home volume", () => {
+  const options: LaunchOptions = {
+    tool: "claude",
+    noPriv: false,
+    yes: false,
+  };
+  const cmd = buildLaunchCmd(
+    options,
+    "/workspace",
+    "goose-volume",
+    "claude-volume",
+    "docker-vol",
+    "/env",
+    "image",
+    ["--resume", "session-id"],
+  );
+  assertEquals(cmd.includes("goose-volume:/home/goose/.config/goose"), false);
+  assertEquals(cmd.includes("claude-volume:/home/goose"), true);
+  assertEquals(cmd.includes("TOOL=claude"), true);
+});
+
+Deno.test("mergeClaudeProjectMcpConfig preserves unrelated servers", () => {
+  const merged = mergeClaudeProjectMcpConfig({
+    mcpServers: {
+      github: {
+        type: "http",
+        url: "https://example.com/mcp",
+      },
+      search: {
+        type: "http",
+        url: "http://old-search/mcp",
+      },
+    },
+    other: true,
+  });
+
+  assertEquals((merged.mcpServers as Record<string, unknown>).github, {
+    type: "http",
+    url: "https://example.com/mcp",
+  });
+  assertEquals(
+    ((merged.mcpServers as Record<string, unknown>).search as Record<
+      string,
+      unknown
+    >).url,
+    "http://mcp-xai:1337/mcp",
+  );
+  assertEquals(
+    ((merged.mcpServers as Record<string, unknown>).playwright as Record<
+      string,
+      unknown
+    >).command,
+    "npx",
+  );
+  assertEquals(merged.other, true);
+});
+
+Deno.test("syncClaudeProjectMcpConfig writes project-scoped .mcp.json", async () => {
+  const projectPath = "/workspace/project";
+  const reads: string[] = [];
+  const writes: Array<{ path: string; content: string }> = [];
+
+  const originalReadTextFile = Deno.readTextFile;
+  (Deno as any).readTextFile = async (path: string) => {
+    reads.push(path);
+    if (path === "/workspace/project/.mcp.json") {
+      return JSON.stringify({
+        mcpServers: {
+          github: {
+            type: "http",
+            url: "https://example.com/mcp",
+          },
+        },
+      });
+    }
+    throw new Deno.errors.NotFound();
+  };
+
+  const originalWriteTextFile = Deno.writeTextFile;
+  (Deno as any).writeTextFile = async (path: string, content: string) => {
+    writes.push({ path, content });
+  };
+
+  try {
+    const configPath = await syncClaudeProjectMcpConfig(projectPath);
+    assertEquals(configPath, "/workspace/project/.mcp.json");
+    assertEquals(reads.includes("/workspace/project/.mcp.json"), true);
+    assertEquals(writes.length, 1);
+    assertEquals(writes[0].path, "/workspace/project/.mcp.json");
+
+    const written = JSON.parse(writes[0].content);
+    assertEquals(written.mcpServers.github.url, "https://example.com/mcp");
+    assertEquals(written.mcpServers.search.url, "http://mcp-xai:1337/mcp");
+    assertEquals(written.mcpServers.playwright.command, "npx");
+  } finally {
+    (Deno as any).readTextFile = originalReadTextFile;
+    (Deno as any).writeTextFile = originalWriteTextFile;
+  }
+});
+
+Deno.test("syncClaudeHomeVolume reuses seeded volume when marker matches", async () => {
+  const originalCommand = Deno.Command;
+  const commands: string[][] = [];
+
+  // @ts-ignore
+  Deno.Command = class MockCommand {
+    args: string[];
+    constructor(_cmd: string, options: { args: string[] }) {
+      this.args = options.args;
+      commands.push(options.args);
+    }
+    output() {
+      const lastArg = this.args[this.args.length - 1];
+      if (this.args[0] === "volume" && this.args[1] === "inspect") {
+        return Promise.resolve({
+          success: true,
+          stdout: new Uint8Array(),
+          stderr: new Uint8Array(),
+        });
+      }
+      if (
+        typeof lastArg === "string" && lastArg.includes("claude-seed-version")
+      ) {
+        return Promise.resolve({
+          success: true,
+          stdout: new TextEncoder().encode("seed-v1"),
+          stderr: new Uint8Array(),
+        });
+      }
+      return Promise.resolve({
+        success: true,
+        stdout: new Uint8Array(),
+        stderr: new Uint8Array(),
+      });
+    }
+  };
+
+  try {
+    const result = await syncClaudeHomeVolume(
+      "claude-configs",
+      "test-image",
+      "seed-v1",
+    );
+    assertEquals(result, "existing");
+    assertEquals(commands.some((args) => args[0] === "create"), false);
+    assertEquals(commands.some((args) => args[0] === "cp"), false);
+  } finally {
+    Deno.Command = originalCommand;
+  }
+});
+
+Deno.test("syncClaudeHomeVolume refreshes runtime assets without nesting .local", async () => {
+  const originalCommand = Deno.Command;
+  const originalMakeTempDir = Deno.makeTempDir;
+  const originalWriteTextFile = Deno.writeTextFile;
+  const originalRemove = Deno.remove;
+  const commands: string[][] = [];
+  const writes: Array<{ path: string; content: string }> = [];
+
+  // @ts-ignore
+  Deno.makeTempDir = async () => "/tmp/claude-seed";
+  Deno.writeTextFile = async (
+    path: string | URL,
+    content: string | ReadableStream<string>,
+  ) => {
+    writes.push({ path: String(path), content: String(content) });
+  };
+  // @ts-ignore
+  Deno.remove = async () => {};
+
+  // @ts-ignore
+  Deno.Command = class MockCommand {
+    args: string[];
+    constructor(_cmd: string, options: { args: string[] }) {
+      this.args = options.args;
+      commands.push(options.args);
+    }
+    output() {
+      const shellSnippet = this.args[this.args.length - 1];
+      if (this.args[0] === "volume" && this.args[1] === "inspect") {
+        return Promise.resolve({
+          success: true,
+          stdout: new Uint8Array(),
+          stderr: new Uint8Array(),
+        });
+      }
+      if (
+        typeof shellSnippet === "string" &&
+        shellSnippet.includes("claude-seed-version")
+      ) {
+        return Promise.resolve({
+          success: true,
+          stdout: new TextEncoder().encode("old-seed"),
+          stderr: new Uint8Array(),
+        });
+      }
+      return Promise.resolve({
+        success: true,
+        stdout: new Uint8Array(),
+        stderr: new Uint8Array(),
+      });
+    }
+  };
+
+  try {
+    const result = await syncClaudeHomeVolume(
+      "claude-configs",
+      "test-image",
+      "seed-v2",
+    );
+    assertEquals(result, "updated");
+    const syncRun = commands.find((args) =>
+      args[0] === "run" && args.includes("/tmp/claude-seed:/seed")
+    );
+    assert(syncRun);
+    const shellSnippet = syncRun[syncRun.length - 1];
+    assertEquals(shellSnippet.includes("rm -rf /target/.local"), true);
+    assertEquals(
+      shellSnippet.includes("cp -a /seed/.local /target/.local"),
+      true,
+    );
+    assertEquals(
+      shellSnippet.includes("cp -a /seed/.local /target/.local/.local"),
+      false,
+    );
+    assertEquals(
+      writes.some((entry) =>
+        entry.path.endsWith(".prompt2pwn-claude-seed-version") &&
+        entry.content === "seed-v2"
+      ),
+      true,
+    );
+  } finally {
+    Deno.Command = originalCommand;
+    Deno.makeTempDir = originalMakeTempDir;
+    Deno.writeTextFile = originalWriteTextFile;
+    Deno.remove = originalRemove;
+  }
 });
 
 Deno.test("syncRecipesToVolume - with config", async () => {
@@ -364,6 +630,8 @@ Deno.test("syncRecipesToVolume - with config", async () => {
   }
   const originalCommand = Deno.Command;
   (Deno.Command as any) = MockCommand;
+  const originalMkdir = Deno.mkdir;
+  (Deno as any).mkdir = async () => {};
   // @ts-ignore
   const originalStat = Deno.stat;
   Deno.stat = async (path: any) => {
@@ -391,10 +659,11 @@ Deno.test("syncRecipesToVolume - with config", async () => {
     await fn({});
   };
   try {
-    await syncRecipesToVolume("/tmp/staging", "goose-configs");
+    await syncGooseRecipesToVolume("/tmp/staging", "goose-configs");
     // Consolidated into one call with sh -c
     const consolidatedCall = calls.find((c) =>
-      c.includes("sh") && c.includes("-c")
+      c.includes("sh") && c.includes("-c") &&
+      c[c.indexOf("-c") + 1].includes("cp /host/config.yaml")
     );
     assert(consolidatedCall !== undefined, "Consolidated docker call missing");
     const shellCmd = consolidatedCall[consolidatedCall.indexOf("-c") + 1];
@@ -409,6 +678,7 @@ Deno.test("syncRecipesToVolume - with config", async () => {
     assertEquals(spinnerCalls.length, 1);
   } finally {
     Deno.Command = originalCommand;
+    (Deno as any).mkdir = originalMkdir;
     Deno.stat = originalStat;
     ux.withSpinner = originalSpinner;
   }
@@ -431,6 +701,8 @@ Deno.test("syncRecipesToVolume - no config", async () => {
   }
   const originalCommand = Deno.Command;
   (Deno.Command as any) = MockCommand;
+  const originalMkdir = Deno.mkdir;
+  (Deno as any).mkdir = async () => {};
   // @ts-ignore
   const originalStat = Deno.stat;
   Deno.stat = async (path: any) => {
@@ -452,9 +724,10 @@ Deno.test("syncRecipesToVolume - no config", async () => {
     await fn({});
   };
   try {
-    await syncRecipesToVolume("/tmp/staging", "goose-configs");
+    await syncGooseRecipesToVolume("/tmp/staging", "goose-configs");
     const consolidatedCall = calls.find((c) =>
-      c.includes("sh") && c.includes("-c")
+      c.includes("sh") && c.includes("-c") &&
+      c[c.indexOf("-c") + 1].includes("cp -a /host/recipes/*")
     );
     assert(consolidatedCall !== undefined, "Consolidated docker call missing");
     const shellCmd = consolidatedCall[consolidatedCall.indexOf("-c") + 1];
@@ -466,6 +739,7 @@ Deno.test("syncRecipesToVolume - no config", async () => {
     assertEquals(spinnerCalls.length, 1);
   } finally {
     Deno.Command = originalCommand;
+    (Deno as any).mkdir = originalMkdir;
     Deno.stat = originalStat;
     ux.withSpinner = originalSpinner;
   }
@@ -488,6 +762,14 @@ Deno.test("pullConfigFromVolume", async () => {
   }
   const originalCommand = Deno.Command;
   (Deno.Command as any) = MockCommand;
+  const originalStat = Deno.stat;
+  Deno.stat = async () =>
+    Promise.resolve({
+      uid: 1000,
+      gid: 1000,
+      isFile: () => false,
+      isDirectory: () => true,
+    } as any);
   const spinnerCalls: string[] = [];
   const originalSpinner = ux.withSpinner;
   // @ts-ignore
@@ -496,7 +778,7 @@ Deno.test("pullConfigFromVolume", async () => {
     await fn({});
   };
   try {
-    await pullConfigFromVolume("/tmp/staging");
+    await pullGooseConfigFromVolume("/tmp/staging");
     const cpCall = calls.find((c) =>
       c.some((arg) => arg.includes("cp /target/config.yaml"))
     );
@@ -504,6 +786,7 @@ Deno.test("pullConfigFromVolume", async () => {
     assertEquals(spinnerCalls.length, 1);
   } finally {
     Deno.Command = originalCommand;
+    Deno.stat = originalStat;
     ux.withSpinner = originalSpinner;
   }
 });

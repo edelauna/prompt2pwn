@@ -5,8 +5,9 @@ import { ensureDir } from "fs/ensure_dir";
 import type { Spinner } from "@std/cli/unstable-spinner";
 import pc from "picocolors";
 
+import { syncClaudeHomeVolume, syncClaudeProjectMcpConfig } from "./claude.ts";
 import { ux } from "./ux.ts";
-import { loadEnvFile, setupEnv } from "./env.ts";
+import { loadEnvFile, setupEnv, setupMcpEnv } from "./env.ts";
 import { setupConfig } from "./config.ts";
 import { getProviderConfig, type GooseProviderName } from "./providers.ts";
 import { runPreflight } from "./preflight.ts";
@@ -26,6 +27,10 @@ import {
 } from "./recipes.ts";
 import { buildLaunchCmd, showLaunchPreview } from "./launch.ts";
 
+type LiteralArgsCommandContext = {
+  getLiteralArgs?: () => string[] | undefined;
+};
+
 async function prepareCTFArgs(
   options: LaunchOptions,
   extraArgs: string[],
@@ -34,9 +39,9 @@ async function prepareCTFArgs(
   const recipeArgs = ["run", "--recipe", "ctf-orchestrator", "--interactive"];
   const fields = [
     {
-      flag: options.pwnChallenge,
-      prompt: "Challenge description (req)",
-      key: "challenge_description",
+      flag: options.pwnObjective,
+      prompt: "Objective / Description (req)",
+      key: "target",
     },
     { flag: options.pwnTarget, prompt: "Target URL", key: "target_url" },
     {
@@ -91,6 +96,7 @@ async function orchestrateLaunchPrep(
 }
 
 const VERSION = "1.0.0";
+const CLAUDE_HOME_SEED_VERSION = `${VERSION}-claude-home-v2`;
 // Robust root detection: always use project root
 const root = dirname(
   Deno.args.includes("--dev")
@@ -98,9 +104,12 @@ const root = dirname(
     : Deno.execPath(),
 );
 
-const configDir = join(Deno.env.get("HOME") || ".", ".config/prompt2pwn");
+function getConfigDir() {
+  return join(Deno.env.get("HOME") || ".", ".config/prompt2pwn");
+}
 
 export async function runCli() {
+  const configDir = getConfigDir();
   await new Command()
     .name("prompt2Pwn")
     .version(VERSION)
@@ -128,7 +137,7 @@ export async function runCli() {
     .option("--no-priv", "Disable privileged mode (security check)")
     .option("--verbose", "Show detailed logs")
     .option("-y, --yes", "Skip confirmation prompts")
-    .option("--pwn-challenge <desc:string>", "CTF challenge description")
+    .option("--pwn-objective <desc:string>", "Objective description")
     .option("--pwn-target <url:string>", "Target URL/IP")
     .option("--pwn-info <extra:string>", "Additional info/hints")
     .option(
@@ -136,10 +145,16 @@ export async function runCli() {
       "Set Goose provider (xai, google, openai, anthropic)",
     )
     .option("--model <model:string>", "Override Goose model (e.g., gemini-pro)")
+    .option("--tool <tool:string>", "AI tool: goose (default) or claude")
     .arguments("[...extraArgs]")
     .stopEarly()
-    .action(async (opts, ...extraArgs) => {
+    .action(async function (opts, ...extraArgs) {
       const options = opts as LaunchOptions;
+
+      if (options.verbose) {
+        ux.info(`[DEBUG] Raw extraArgs: ${JSON.stringify(extraArgs)}`);
+      }
+
       if (options.verbose) {
         ux.info("Verbose mode enabled");
         ux.info(`[DEBUG] Full opts: ${JSON.stringify(opts)}`);
@@ -150,29 +165,67 @@ export async function runCli() {
         );
       }
 
-      const fullExtraArgs = await prepareCTFArgs(options, extraArgs);
-      const { xaiKey, provider, model, providerApiKey, sourcegraphToken } =
-        await setupEnv(
+      const literals = (this as LiteralArgsCommandContext).getLiteralArgs?.() ??
+        [];
+      if (options.verbose) {
+        ux.info(
+          `[DEBUG] Raw literalArgs (post --): ${JSON.stringify(literals)}`,
+        );
+      }
+      const allPassthroughArgs = [...extraArgs, ...literals];
+      const tool = options.tool || "goose";
+      let fullExtraArgs: string[];
+      if (tool === "claude") {
+        fullExtraArgs = allPassthroughArgs;
+      } else {
+        fullExtraArgs = await prepareCTFArgs(options, allPassthroughArgs);
+      }
+      await ensureDir(configDir);
+      await ensureDockerCompose(configDir);
+      const envPath = join(configDir, ".env");
+      const existingEnv = await loadEnvFile(envPath); // Parse existing
+      let providerDisplay = "Claude";
+      let modelDisplay = "Project MCP";
+      let newEnv = { ...existingEnv };
+
+      if (tool === "claude") {
+        const { xaiKey, sourcegraphToken } = await setupMcpEnv(
+          root,
+          configDir,
+          options.yes,
+        );
+        newEnv = {
+          ...newEnv,
+          ...(sourcegraphToken !== undefined && {
+            SOURCEGRAPH_TOKEN: sourcegraphToken,
+          }),
+          ...(xaiKey && { XAI_API_KEY: xaiKey }),
+        };
+      } else {
+        const envResult = await setupEnv(
           root,
           configDir,
           options.yes,
           options.provider as GooseProviderName,
           options.model,
         );
-      await ensureDir(configDir);
-      await ensureDockerCompose(configDir);
-      const envPath = join(configDir, ".env");
-      const providerConfig = await getProviderConfig(provider);
-
-      const existingEnv = await loadEnvFile(envPath); // Parse existing
-      const newEnv = {
-        ...existingEnv,
-        GOOSE_PROVIDER: provider,
-        GOOSE_MODEL: model,
-        ...(providerApiKey && { [providerConfig.keyEnv]: providerApiKey }),
-        SOURCEGRAPH_TOKEN: sourcegraphToken || "",
-        ...(xaiKey && provider !== "xai" && { XAI_API_KEY: xaiKey }),
-      };
+        providerDisplay = envResult.provider;
+        modelDisplay = envResult.model;
+        const providerConfig = await getProviderConfig(envResult.provider);
+        newEnv = {
+          ...newEnv,
+          GOOSE_PROVIDER: envResult.provider,
+          GOOSE_MODEL: envResult.model,
+          ...(envResult.providerApiKey && {
+            [providerConfig.keyEnv]: envResult.providerApiKey,
+          }),
+          SOURCEGRAPH_TOKEN: envResult.sourcegraphToken || "",
+          ...(envResult.xaiKey && envResult.provider !== "xai" && {
+            XAI_API_KEY: envResult.xaiKey,
+          }),
+          TOOL: tool,
+        };
+      }
 
       const newContent = Object.entries(newEnv)
         .map(([k, v]) => `${k}=${v}`)
@@ -191,6 +244,7 @@ export async function runCli() {
       const workspacePath = Deno.cwd();
       const stagingPath = join(root, ".goose-staging");
       const volumeName = "goose-configs";
+      const claudeVolumeName = `claude-configs`;
       const dockerCacheVol = `goose-docker-cache-${basename(workspacePath)}`;
       if (options.launchFile) {
         const fullPath = join(workspacePath, options.launchFile);
@@ -202,23 +256,49 @@ export async function runCli() {
         }
       }
       const image = await resolveGooseImage(root);
-      await orchestrateLaunchPrep(
-        options,
-        stagingPath,
-        root,
-        configDir,
-        envPath,
-        volumeName,
-      );
-      await syncRecipesToVolume(stagingPath, volumeName);
+      if (tool === "claude") {
+        const mcpConfigPath = await syncClaudeProjectMcpConfig(workspacePath);
+        ux.info(`Updated Claude project MCP config at ${mcpConfigPath}`);
+        await ux.withSpinner(
+          "Preparing Claude volume...",
+          async (spinner: Spinner) => {
+            spinner.message = pc.cyan(`Ensuring volume ${claudeVolumeName}...`);
+            const syncState = await syncClaudeHomeVolume(
+              claudeVolumeName,
+              image,
+              CLAUDE_HOME_SEED_VERSION,
+            );
+            if (syncState === "created") {
+              spinner.message = pc.cyan("Seeded Claude home runtime assets...");
+            } else if (syncState === "updated") {
+              spinner.message = pc.cyan(
+                "Refreshed Claude home runtime assets...",
+              );
+            } else {
+              spinner.message = pc.cyan("Reusing existing Claude volume...");
+            }
+          },
+        );
+      }
+      if (tool !== "claude") {
+        await orchestrateLaunchPrep(
+          options,
+          stagingPath,
+          root,
+          configDir,
+          envPath,
+          volumeName,
+        );
+        await syncRecipesToVolume(stagingPath, volumeName);
+      }
       ux.success("✔ Environment Prepared.");
       showLaunchPreview(
         options,
         workspacePath,
         stagingPath,
-        volumeName,
-        provider,
-        model,
+        tool === "claude" ? claudeVolumeName : volumeName,
+        providerDisplay,
+        modelDisplay,
       );
       if (!options.yes) {
         const ok = await Confirm.prompt({
@@ -231,6 +311,7 @@ export async function runCli() {
         options,
         workspacePath,
         volumeName,
+        claudeVolumeName,
         dockerCacheVol,
         envPath,
         image,
@@ -252,7 +333,9 @@ export async function runCli() {
       await runGooseDocker(fullCmd);
 
       // Sync back any configuration changes made during the session
-      await pullConfigFromVolume(stagingPath, volumeName);
+      if (options.tool !== "claude") {
+        await pullConfigFromVolume(stagingPath, volumeName);
+      }
     })
     .parse(Deno.args);
 }

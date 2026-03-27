@@ -1,4 +1,4 @@
-FROM ghcr.io/block/goose:1.23.2
+FROM ghcr.io/block/goose:1.23
 
 LABEL version="1.0.0"
 LABEL org.opencontainers.image.source="https://github.com/edelauna/prompt2pwn"
@@ -15,8 +15,16 @@ RUN apt-get update && apt-get install -y \
     iptables \
     dbus-user-session \
     python3-full \
+    python3-pip \
     ripgrep \
+    binutils \
+    libatomic1 \
+    jq \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
+
+# Now install pyotp using the newly installed pip
+RUN pip3 install pyotp --break-system-packages
 
 # Install Docker Engine (official repo is best for DinD)
 RUN mkdir -p /etc/apt/keyrings && \
@@ -32,6 +40,40 @@ RUN mkdir -p /etc/apt/keyrings && \
 # 2. Configure Docker to use VFS (essential for nested storage without setup complexity)
 RUN mkdir -p /etc/docker && \
     echo '{"storage-driver": "vfs", "mtu": 1450 }' > /etc/docker/daemon.json
+
+# Playwright
+# Install Node.js (required for Playwright MCP) and browser dependencies
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs \
+    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 \
+    libgbm1 libasound2 libpango-1.0-0 libcairo2 \
+    libxss1 libatspi2.0-0 libgtk-3-0 fonts-liberation \
+    libappindicator3-1 xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @playwright/mcp playwright
+
+# Install chrome browser as root (required for chrome channel)
+RUN npx playwright@latest install chrome
+
+# Ensure npm and playwright caches are owned by goose user
+RUN chown -R goose:goose /home/goose/.npm /home/goose/.cache
+
+# Claude dirs
+RUN mkdir -p /home/goose/.local/bin /home/goose/.claude && \
+    chown -R goose:goose /home/goose/.local /home/goose/.claude
+
+    # Switch to goose user for browser installation
+USER goose
+
+# Install Playwright browsers as goose user (ensures cache is in /home/goose/.cache/ms-playwright/)
+RUN npx playwright@latest install chromium
+
+# Installing Claude
+RUN curl -fsSL https://claude.ai/install.sh | bash
+ENV PATH="/home/goose/.local/bin:${PATH}"
+USER root
 
 # 3. Set home directory
 ENV HOME=/home/goose

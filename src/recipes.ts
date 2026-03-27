@@ -8,7 +8,6 @@ export async function seedRecipes(
   root: string,
 ): Promise<string> {
   let seededType = "";
-  // Skip if staging already has recipes (user-managed)
   const stagingRecipesDir = join(stagingPath, "recipes");
   try {
     for await (const entry of walk(stagingRecipesDir, { maxDepth: 1 })) {
@@ -16,7 +15,9 @@ export async function seedRecipes(
         return "existing";
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    // Ignore missing staging dir; first-run seeding continues below.
+  }
   // External recipes (next to binary/source)
   const recipesDir = join(root, "recipes");
   try {
@@ -36,7 +37,6 @@ export async function seedRecipes(
   if (!seededType) {
     const bundledFiles = [
       "./recipes/ctf-orchestrator.yaml",
-      "./recipes/simple-task-executor.yaml",
     ];
     for (const relPath of bundledFiles) {
       try {
@@ -52,6 +52,23 @@ export async function seedRecipes(
   return seededType;
 }
 
+async function chownVolume(volumeName: string, uid: number, gid: number) {
+  const result = await new Deno.Command("docker", {
+    args: [
+      "run",
+      "--rm",
+      `-v${volumeName}:/target`,
+      "alpine",
+      "sh",
+      "-c",
+      `chown -R ${uid}:${gid} /target 2>/dev/null || true`,
+    ],
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  // Ignore errors, as chown might fail if volume is empty or already owned
+}
+
 export async function syncVolume(
   stagingPath: string,
   volumeName: string,
@@ -64,19 +81,22 @@ export async function syncVolume(
   if (options.config) {
     const configPath = join(stagingPath, "config.yaml");
     if (await Deno.stat(configPath).then((s) => s.isFile).catch(() => false)) {
-      commands.push("cp /host/config.yaml /target/config.yaml");
+      commands.push(
+        "rm -f /target/config.yaml && cp /host/config.yaml /target/config.yaml",
+      );
     }
   }
   if (options.recipes) {
     commands.push(
-      "mkdir -p /target/recipes && cp -a /host/recipes/* /target/recipes/ 2>/dev/null || true",
+      'mkdir -p /target/recipes && if [ "$(ls -A /host/recipes 2>/dev/null)" ]; then cp -a /host/recipes/* /target/recipes/; fi',
     );
   }
   if (commands.length === 0) return;
   const stat = await Deno.stat(stagingPath);
   const uid = stat.uid ?? 1000;
   const gid = stat.gid ?? 1000;
-  await new Deno.Command("docker", {
+  await chownVolume(volumeName, uid, gid);
+  const result = await new Deno.Command("docker", {
     args: [
       "run",
       "--rm",
@@ -91,6 +111,11 @@ export async function syncVolume(
     stdout: "piped",
     stderr: "piped",
   }).output();
+  if (!result.success) {
+    const stderr = new TextDecoder().decode(result.stderr);
+    console.error(`Failed to sync volume: ${stderr}`);
+    throw new Error(`Volume sync failed: ${stderr}`);
+  }
 }
 
 export async function syncRecipesToVolume(

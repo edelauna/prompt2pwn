@@ -477,6 +477,12 @@ Deno.test("cleanupOldVolumes - removes old volumes", async () => {
   const originalWarn = ux.warn;
   const commands: string[][] = [];
   let warnCalled = false;
+  const oldTimestamp = new Date(
+    Date.now() - 60 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const recentTimestamp = new Date(
+    Date.now() - 10 * 24 * 60 * 60 * 1000,
+  ).toISOString();
 
   // @ts-ignore
   Deno.Command = class MockCommand {
@@ -486,8 +492,9 @@ Deno.test("cleanupOldVolumes - removes old volumes", async () => {
     output() {
       const lastCmd = commands[commands.length - 1];
       if (lastCmd.includes("ls")) {
-        const output =
-          "goose-docker-cache-old-volume\t2023-01-01T00:00:00Z\ngoose-docker-cache-new-volume\t2026-02-20T00:00:00Z\nother-volume\t2023-01-01T00:00:00Z\n";
+        const output = `goose-docker-cache-old-volume\t${oldTimestamp}\n` +
+          `goose-docker-cache-new-volume\t${recentTimestamp}\n` +
+          `other-volume\t${oldTimestamp}\n`;
         return Promise.resolve({
           success: true,
           stdout: new TextEncoder().encode(output),
@@ -531,6 +538,9 @@ Deno.test("cleanupOldVolumes - no volumes to clean", async () => {
   const originalWarn = ux.warn;
   const commands: string[][] = [];
   let warnCalled = false;
+  const recentTimestamp = new Date(
+    Date.now() - 10 * 24 * 60 * 60 * 1000,
+  ).toISOString();
 
   // @ts-ignore
   Deno.Command = class MockCommand {
@@ -540,8 +550,8 @@ Deno.test("cleanupOldVolumes - no volumes to clean", async () => {
     output() {
       const lastCmd = commands[commands.length - 1];
       if (lastCmd.includes("ls")) {
-        const output =
-          "goose-docker-cache-new-volume\t2026-02-20T00:00:00Z\nother-volume\t2026-02-20T00:00:00Z\n";
+        const output = `goose-docker-cache-new-volume\t${recentTimestamp}\n` +
+          `other-volume\t${recentTimestamp}\n`;
         return Promise.resolve({
           success: true,
           stdout: new TextEncoder().encode(output),
@@ -602,6 +612,9 @@ Deno.test("cleanupOldVolumes - handles volume removal failure", async () => {
   const commands: string[][] = [];
   let warnCalled = false;
   let warnMessage = "";
+  const oldTimestamp = new Date(
+    Date.now() - 60 * 24 * 60 * 60 * 1000,
+  ).toISOString();
 
   // @ts-ignore
   Deno.Command = class MockCommand {
@@ -611,7 +624,7 @@ Deno.test("cleanupOldVolumes - handles volume removal failure", async () => {
     output() {
       const lastCmd = commands[commands.length - 1];
       if (lastCmd.includes("ls")) {
-        const output = "goose-docker-cache-old-volume\t2023-01-01T00:00:00Z\n";
+        const output = `goose-docker-cache-old-volume\t${oldTimestamp}\n`;
         return Promise.resolve({
           success: true,
           stdout: new TextEncoder().encode(output),

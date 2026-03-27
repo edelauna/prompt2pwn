@@ -9,7 +9,7 @@ export interface LaunchOptions {
   pwnInfo?: string;
   provider?: string;
   model?: string;
-  tool?: 'goose' | 'claude';
+  tool?: "goose" | "claude";
 }
 
 export interface AppConfig {

@@ -53,7 +53,7 @@ export async function seedRecipes(
 }
 
 async function chownVolume(volumeName: string, uid: number, gid: number) {
-  const result = await new Deno.Command("docker", {
+  await new Deno.Command("docker", {
     args: [
       "run",
       "--rm",

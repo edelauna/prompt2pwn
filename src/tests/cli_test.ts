@@ -2,7 +2,7 @@ import { assert, assertEquals } from "std/assert";
 import {
   mergeClaudeProjectMcpConfig,
   syncClaudeProjectMcpConfig,
-} from "../cli.ts";
+} from "../claude.ts";
 import {
   pullConfigFromVolume as pullGooseConfigFromVolume,
   seedRecipes as seedGooseRecipes,

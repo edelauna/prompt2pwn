@@ -99,3 +99,49 @@ export async function setupEnv(
     sourcegraphToken,
   };
 }
+
+export async function setupMcpEnv(
+  root: string,
+  configDir: string,
+  skipOptionalPrompts = false,
+) {
+  const env1 = await loadEnvFile(".env");
+  const env2 = await loadEnvFile(join(root, ".env"));
+  const env3 = await loadEnvFile(join(configDir, ".env"));
+  const env: Record<string, string> = { ...env3, ...env2, ...env1 };
+
+  let xaiKey: string | undefined = env["XAI_API_KEY"] ||
+    Deno.env.get("XAI_API_KEY");
+  if (!xaiKey && !skipOptionalPrompts) {
+    const wantXaiMcp = await Confirm.prompt({
+      message:
+        "Configure XAI_API_KEY for MCP search tools? (optional, skip for Sourcegraph-only tools)",
+      default: true,
+    });
+    if (wantXaiMcp) {
+      xaiKey = await Input.prompt({
+        message: "Please enter your XAI_API_KEY:",
+      });
+      if (!xaiKey) {
+        ux.error("XAI_API_KEY is required.");
+        Deno.exit(1);
+      }
+    }
+  }
+
+  let sourcegraphToken = env["SOURCEGRAPH_TOKEN"] ||
+    Deno.env.get("SOURCEGRAPH_TOKEN");
+  if (!sourcegraphToken && !skipOptionalPrompts) {
+    const wantSg = await Confirm.prompt({
+      message: "Configure SOURCEGRAPH_TOKEN for code search tools? (optional)",
+      default: false,
+    });
+    if (wantSg) {
+      sourcegraphToken = await Input.prompt({
+        message: "Enter your SOURCEGRAPH_TOKEN:",
+      });
+    }
+  }
+
+  return { xaiKey, sourcegraphToken };
+}

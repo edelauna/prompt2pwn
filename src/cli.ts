@@ -5,9 +5,9 @@ import { ensureDir } from "fs/ensure_dir";
 import type { Spinner } from "@std/cli/unstable-spinner";
 import pc from "picocolors";
 
-import { syncClaudeProjectMcpConfig } from "./claude.ts";
+import { syncClaudeHomeVolume, syncClaudeProjectMcpConfig } from "./claude.ts";
 import { ux } from "./ux.ts";
-import { loadEnvFile, setupEnv } from "./env.ts";
+import { loadEnvFile, setupEnv, setupMcpEnv } from "./env.ts";
 import { setupConfig } from "./config.ts";
 import { getProviderConfig, type GooseProviderName } from "./providers.ts";
 import { runPreflight } from "./preflight.ts";
@@ -95,99 +95,8 @@ async function orchestrateLaunchPrep(
   return seededType;
 }
 
-async function seedClaudeVolume(
-  volumeName: string,
-  image: string,
-) {
-  const inspectRes = await new Deno.Command("docker", {
-    args: ["volume", "inspect", volumeName],
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (inspectRes.success) return false;
-
-  const createVolumeRes = await new Deno.Command("docker", {
-    args: ["volume", "create", volumeName],
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (!createVolumeRes.success) {
-    throw new Error(
-      `docker volume create failed: ${
-        new TextDecoder().decode(createVolumeRes.stderr)
-      }`,
-    );
-  }
-
-  const tmpName = `seed-claude-vol-${Date.now()}`;
-  const tmpDir = await Deno.makeTempDir({ prefix: "claude-seed-" });
-  try {
-    const createRes = await new Deno.Command("docker", {
-      args: ["create", "--name", tmpName, image],
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
-    if (!createRes.success) {
-      throw new Error(
-        `docker create failed: ${new TextDecoder().decode(createRes.stderr)}`,
-      );
-    }
-
-    for (const path of [".local", ".cache/ms-playwright"]) {
-      const cpRes = await new Deno.Command("docker", {
-        args: ["cp", `${tmpName}:/home/goose/${path}`, `${tmpDir}/${path}`],
-        stdout: "piped",
-        stderr: "piped",
-      }).output();
-      if (!cpRes.success) {
-        throw new Error(
-          `docker cp failed for ${path}: ${
-            new TextDecoder().decode(cpRes.stderr)
-          }`,
-        );
-      }
-    }
-    const volCpRes = await new Deno.Command("docker", {
-      args: [
-        "run",
-        "--rm",
-        "-v",
-        `${volumeName}:/target`,
-        "-v",
-        `${tmpDir}:/seed`,
-        "alpine",
-        "sh",
-        "-c",
-        [
-          "mkdir -p /target/.local /target/.cache",
-          "cp -a /seed/.local /target/.local",
-          "mkdir -p /target/.cache",
-          "cp -a /seed/.cache/ms-playwright /target/.cache/ms-playwright",
-        ].join(" && "),
-      ],
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
-    if (!volCpRes.success) {
-      throw new Error(
-        `Failed to seed Claude volume: ${
-          new TextDecoder().decode(volCpRes.stderr)
-        }`,
-      );
-    }
-  } finally {
-    await new Deno.Command("docker", {
-      args: ["rm", "-f", tmpName],
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
-    await Deno.remove(tmpDir, { recursive: true });
-  }
-
-  return true;
-}
-
 const VERSION = "1.0.0";
+const CLAUDE_HOME_SEED_VERSION = `${VERSION}-claude-home-v2`;
 // Robust root detection: always use project root
 const root = dirname(
   Deno.args.includes("--dev")
@@ -264,35 +173,59 @@ export async function runCli() {
         );
       }
       const allPassthroughArgs = [...extraArgs, ...literals];
+      const tool = options.tool || "goose";
       let fullExtraArgs: string[];
-      if (options.tool === "claude") {
+      if (tool === "claude") {
         fullExtraArgs = allPassthroughArgs;
       } else {
         fullExtraArgs = await prepareCTFArgs(options, allPassthroughArgs);
       }
-      const { xaiKey, provider, model, providerApiKey, sourcegraphToken } =
-        await setupEnv(
+      await ensureDir(configDir);
+      await ensureDockerCompose(configDir);
+      const envPath = join(configDir, ".env");
+      const existingEnv = await loadEnvFile(envPath); // Parse existing
+      let providerDisplay = "Claude";
+      let modelDisplay = "Project MCP";
+      let newEnv = { ...existingEnv };
+
+      if (tool === "claude") {
+        const { xaiKey, sourcegraphToken } = await setupMcpEnv(
+          root,
+          configDir,
+          options.yes,
+        );
+        newEnv = {
+          ...newEnv,
+          ...(sourcegraphToken !== undefined && {
+            SOURCEGRAPH_TOKEN: sourcegraphToken,
+          }),
+          ...(xaiKey && { XAI_API_KEY: xaiKey }),
+        };
+      } else {
+        const envResult = await setupEnv(
           root,
           configDir,
           options.yes,
           options.provider as GooseProviderName,
           options.model,
         );
-      await ensureDir(configDir);
-      await ensureDockerCompose(configDir);
-      const envPath = join(configDir, ".env");
-      const providerConfig = await getProviderConfig(provider);
-
-      const existingEnv = await loadEnvFile(envPath); // Parse existing
-      const newEnv = {
-        ...existingEnv,
-        GOOSE_PROVIDER: provider,
-        GOOSE_MODEL: model,
-        ...(providerApiKey && { [providerConfig.keyEnv]: providerApiKey }),
-        SOURCEGRAPH_TOKEN: sourcegraphToken || "",
-        ...(xaiKey && provider !== "xai" && { XAI_API_KEY: xaiKey }),
-        TOOL: options.tool || "goose",
-      };
+        providerDisplay = envResult.provider;
+        modelDisplay = envResult.model;
+        const providerConfig = await getProviderConfig(envResult.provider);
+        newEnv = {
+          ...newEnv,
+          GOOSE_PROVIDER: envResult.provider,
+          GOOSE_MODEL: envResult.model,
+          ...(envResult.providerApiKey && {
+            [providerConfig.keyEnv]: envResult.providerApiKey,
+          }),
+          SOURCEGRAPH_TOKEN: envResult.sourcegraphToken || "",
+          ...(envResult.xaiKey && envResult.provider !== "xai" && {
+            XAI_API_KEY: envResult.xaiKey,
+          }),
+          TOOL: tool,
+        };
+      }
 
       const newContent = Object.entries(newEnv)
         .map(([k, v]) => `${k}=${v}`)
@@ -323,23 +256,31 @@ export async function runCli() {
         }
       }
       const image = await resolveGooseImage(root);
-      if (options.tool === "claude") {
+      if (tool === "claude") {
         const mcpConfigPath = await syncClaudeProjectMcpConfig(workspacePath);
         ux.info(`Updated Claude project MCP config at ${mcpConfigPath}`);
         await ux.withSpinner(
           "Preparing Claude volume...",
           async (spinner: Spinner) => {
             spinner.message = pc.cyan(`Ensuring volume ${claudeVolumeName}...`);
-            const seeded = await seedClaudeVolume(claudeVolumeName, image);
-            if (seeded) {
-              spinner.message = pc.cyan("Seeded Claude home and MCP config...");
+            const syncState = await syncClaudeHomeVolume(
+              claudeVolumeName,
+              image,
+              CLAUDE_HOME_SEED_VERSION,
+            );
+            if (syncState === "created") {
+              spinner.message = pc.cyan("Seeded Claude home runtime assets...");
+            } else if (syncState === "updated") {
+              spinner.message = pc.cyan(
+                "Refreshed Claude home runtime assets...",
+              );
             } else {
               spinner.message = pc.cyan("Reusing existing Claude volume...");
             }
           },
         );
       }
-      if (options.tool !== "claude") {
+      if (tool !== "claude") {
         await orchestrateLaunchPrep(
           options,
           stagingPath,
@@ -355,9 +296,9 @@ export async function runCli() {
         options,
         workspacePath,
         stagingPath,
-        options.tool === "claude" ? claudeVolumeName : volumeName,
-        provider,
-        model,
+        tool === "claude" ? claudeVolumeName : volumeName,
+        providerDisplay,
+        modelDisplay,
       );
       if (!options.yes) {
         const ok = await Confirm.prompt({

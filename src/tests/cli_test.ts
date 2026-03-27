@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "std/assert";
 import {
   mergeClaudeProjectMcpConfig,
+  syncClaudeHomeVolume,
   syncClaudeProjectMcpConfig,
 } from "../claude.ts";
 import {
@@ -469,6 +470,146 @@ Deno.test("syncClaudeProjectMcpConfig writes project-scoped .mcp.json", async ()
   } finally {
     (Deno as any).readTextFile = originalReadTextFile;
     (Deno as any).writeTextFile = originalWriteTextFile;
+  }
+});
+
+Deno.test("syncClaudeHomeVolume reuses seeded volume when marker matches", async () => {
+  const originalCommand = Deno.Command;
+  const commands: string[][] = [];
+
+  // @ts-ignore
+  Deno.Command = class MockCommand {
+    args: string[];
+    constructor(_cmd: string, options: { args: string[] }) {
+      this.args = options.args;
+      commands.push(options.args);
+    }
+    output() {
+      const lastArg = this.args[this.args.length - 1];
+      if (this.args[0] === "volume" && this.args[1] === "inspect") {
+        return Promise.resolve({
+          success: true,
+          stdout: new Uint8Array(),
+          stderr: new Uint8Array(),
+        });
+      }
+      if (
+        typeof lastArg === "string" && lastArg.includes("claude-seed-version")
+      ) {
+        return Promise.resolve({
+          success: true,
+          stdout: new TextEncoder().encode("seed-v1"),
+          stderr: new Uint8Array(),
+        });
+      }
+      return Promise.resolve({
+        success: true,
+        stdout: new Uint8Array(),
+        stderr: new Uint8Array(),
+      });
+    }
+  };
+
+  try {
+    const result = await syncClaudeHomeVolume(
+      "claude-configs",
+      "test-image",
+      "seed-v1",
+    );
+    assertEquals(result, "existing");
+    assertEquals(commands.some((args) => args[0] === "create"), false);
+    assertEquals(commands.some((args) => args[0] === "cp"), false);
+  } finally {
+    Deno.Command = originalCommand;
+  }
+});
+
+Deno.test("syncClaudeHomeVolume refreshes runtime assets without nesting .local", async () => {
+  const originalCommand = Deno.Command;
+  const originalMakeTempDir = Deno.makeTempDir;
+  const originalWriteTextFile = Deno.writeTextFile;
+  const originalRemove = Deno.remove;
+  const commands: string[][] = [];
+  const writes: Array<{ path: string; content: string }> = [];
+
+  // @ts-ignore
+  Deno.makeTempDir = async () => "/tmp/claude-seed";
+  Deno.writeTextFile = async (
+    path: string | URL,
+    content: string | ReadableStream<string>,
+  ) => {
+    writes.push({ path: String(path), content: String(content) });
+  };
+  // @ts-ignore
+  Deno.remove = async () => {};
+
+  // @ts-ignore
+  Deno.Command = class MockCommand {
+    args: string[];
+    constructor(_cmd: string, options: { args: string[] }) {
+      this.args = options.args;
+      commands.push(options.args);
+    }
+    output() {
+      const shellSnippet = this.args[this.args.length - 1];
+      if (this.args[0] === "volume" && this.args[1] === "inspect") {
+        return Promise.resolve({
+          success: true,
+          stdout: new Uint8Array(),
+          stderr: new Uint8Array(),
+        });
+      }
+      if (
+        typeof shellSnippet === "string" &&
+        shellSnippet.includes("claude-seed-version")
+      ) {
+        return Promise.resolve({
+          success: true,
+          stdout: new TextEncoder().encode("old-seed"),
+          stderr: new Uint8Array(),
+        });
+      }
+      return Promise.resolve({
+        success: true,
+        stdout: new Uint8Array(),
+        stderr: new Uint8Array(),
+      });
+    }
+  };
+
+  try {
+    const result = await syncClaudeHomeVolume(
+      "claude-configs",
+      "test-image",
+      "seed-v2",
+    );
+    assertEquals(result, "updated");
+    const syncRun = commands.find((args) =>
+      args[0] === "run" && args.includes("/tmp/claude-seed:/seed")
+    );
+    assert(syncRun);
+    const shellSnippet = syncRun[syncRun.length - 1];
+    assertEquals(shellSnippet.includes("rm -rf /target/.local"), true);
+    assertEquals(
+      shellSnippet.includes("cp -a /seed/.local /target/.local"),
+      true,
+    );
+    assertEquals(
+      shellSnippet.includes("cp -a /seed/.local /target/.local/.local"),
+      false,
+    );
+    assertEquals(
+      writes.some((entry) =>
+        entry.path.endsWith(".prompt2pwn-claude-seed-version") &&
+        entry.content === "seed-v2"
+      ),
+      true,
+    );
+  } finally {
+    Deno.Command = originalCommand;
+    Deno.makeTempDir = originalMakeTempDir;
+    Deno.writeTextFile = originalWriteTextFile;
+    Deno.remove = originalRemove;
   }
 });
 

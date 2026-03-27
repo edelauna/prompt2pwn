@@ -35,7 +35,8 @@ fi
 
 # Drop privileges (unless called from root) - limits the ability of agents to rewrite network
 if [ "$TOOL" = "claude" ]; then
-  chown -R ${HOST_UID}:${HOST_GID} /home/goose
+  mkdir -p /home/goose/.local /home/goose/.cache /home/goose/.claude
+  chown -R ${HOST_UID}:${HOST_GID} /home/goose/.local /home/goose/.cache /home/goose/.claude
 else
   chown -R ${HOST_UID}:${HOST_GID} /home/goose/.config/goose
 fi

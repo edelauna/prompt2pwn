@@ -8,7 +8,7 @@
     "compile:win": "deno compile --target x86_64-pc-windows-msvc --include recipes/ --include docker-compose.yml --allow-read --allow-write --allow-run --allow-env --output out/prompt2pwn goose-nest.ts",
     "compile:bundle": "deno compile --include recipes/ --include docker-compose.yml --allow-read --allow-write --allow-run --allow-env --output out/prompt2pwn goose-nest.ts",
     "test": "deno eval 'await Deno.remove(\"cov_profile\", { recursive: true }).catch(() => {});' && CI=1 deno test -A --coverage=cov_profile --coverage-raw-data-only src/",
-    "test:coverage": "deno task test && deno coverage cov_profile --exclude='src/(recipes|claude|env)\\.ts'",
+    "test:coverage": "deno task test && deno coverage cov_profile --exclude='src/(recipes|claude|codex|env|launch)\\.ts'",
     "start": "deno run --allow-read --allow-write --allow-run --allow-env goose-nest.ts"
   },
   "compilerOptions": {

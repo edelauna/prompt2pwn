@@ -28,6 +28,7 @@ prompt2pwn [preflight|down|launch] [options]
 - `--no-priv`: Safer Docker
 - `--verbose`
 - `--provider <name>`: Set LLM provider (xai, google, openai, anthropic)
+- `--tool <name>`: Select `goose`, `claude`, or `codex`
 - `[...extraArgs]`: Goose cmds
 
 ## Providers
@@ -52,6 +53,8 @@ tools.
 ```sh
 prompt2pwn launch  # Interactive CTF
 prompt2pwn launch --yes --pwn-objective \"XSS vuln\"
+prompt2pwn launch --tool claude --resume
+prompt2pwn launch --tool codex -- --full-auto
 prompt2pwn preflight
 prompt2pwn down
 ```
@@ -108,6 +111,6 @@ graph TB
 
 - CTF recipe orchestrator.
 - Bundled/external recipes.
-- Persistent configs.
+- Persistent configs and home volumes for Goose, Claude, and Codex.
 - Preflight checks.
 - See [`CONTRIBUTING.md`](CONTRIBUTING.md)

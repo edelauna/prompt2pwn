@@ -52,22 +52,20 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     libappindicator3-1 xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @playwright/mcp playwright
+RUN npm install -g @openai/codex @playwright/mcp playwright
 
-# Install chrome browser as root (required for chrome channel)
-RUN npx playwright@latest install chrome
+# Ensure npm and Playwright cache roots exist and are owned by goose user.
+RUN mkdir -p /home/goose/.npm /home/goose/.cache && \
+    chown -R goose:goose /home/goose/.npm /home/goose/.cache
 
-# Ensure npm and playwright caches are owned by goose user
-RUN chown -R goose:goose /home/goose/.npm /home/goose/.cache
-
-# Claude dirs
-RUN mkdir -p /home/goose/.local/bin /home/goose/.claude && \
-    chown -R goose:goose /home/goose/.local /home/goose/.claude
+# Claude/Codex dirs
+RUN mkdir -p /home/goose/.local/bin /home/goose/.claude /home/goose/.codex && \
+    chown -R goose:goose /home/goose/.local /home/goose/.claude /home/goose/.codex
 
     # Switch to goose user for browser installation
 USER goose
 
-# Install Playwright browsers as goose user (ensures cache is in /home/goose/.cache/ms-playwright/)
+# Install Playwright-managed Chromium as goose user so the cache lands in /home/goose/.cache/ms-playwright/
 RUN npx playwright@latest install chromium
 
 # Installing Claude

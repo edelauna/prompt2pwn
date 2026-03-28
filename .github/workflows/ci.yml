@@ -22,7 +22,7 @@ jobs:
       - name: Coverage
         run: |
           mkdir -p coverage
-          deno coverage cov_profile --exclude='src/(recipes|claude|env)\.ts' --lcov --output=coverage/lcov.info
+          deno coverage cov_profile --exclude='src/(recipes|claude|codex|env|launch)\.ts' --lcov --output=coverage/lcov.info
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-lcov
@@ -75,13 +75,22 @@ jobs:
       - uses: jdx/mise-action@v3
         with:
           cache: true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - name: Create .env file
         run: |
           echo "XAI_API_KEY=dummy" > .env
           echo "SOURCEGRAPH_TOKEN=dummy" >> .env
           echo "GOOSE_PROVIDER=xai" >> .env
       - name: Build Goose image
-        run: docker build -t edelauna/goose-dind:latest -f Dockerfile.goose .
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.goose
+          load: true
+          tags: edelauna/goose-dind:latest
+          cache-from: type=gha,scope=goose-dind
+          cache-to: type=gha,mode=max,scope=goose-dind
       - name: Build services
         run: docker compose build
       - name: Start services
@@ -90,7 +99,34 @@ jobs:
         run: deno task start preflight
       - name: Compile and run launch
         run: |
-          script -q -c "deno task compile:linux && mv out/prompt2pwn prompt2pwn-linux-amd64 && ./prompt2pwn-linux-amd64 launch --yes --no-priv info"
+          script -q -c "deno task compile:linux && mv out/prompt2pwn prompt2pwn-linux-amd64 && ./prompt2pwn-linux-amd64 launch --yes --no-priv info && ./prompt2pwn-linux-amd64 launch --tool claude --yes --no-priv -- --version && ./prompt2pwn-linux-amd64 launch --tool codex --yes --no-priv -- --version"
+
+  docker-smoke:
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Smoke build Goose DinD
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.goose
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha,scope=goose-dind
+          cache-to: type=gha,mode=max,scope=goose-dind
+      - name: Smoke build MCP XAI
+        uses: docker/build-push-action@v5
+        with:
+          context: ./mcp-xai
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha,scope=mcp-xai
+          cache-to: type=gha,mode=max,scope=mcp-xai
 
   docker-release:
     needs: [test, compile]
@@ -115,6 +151,8 @@ jobs:
           file: ./Dockerfile.goose
           platforms: linux/amd64,linux/arm64
           push: true
+          cache-from: type=gha,scope=goose-dind
+          cache-to: type=gha,mode=max,scope=goose-dind
           tags: |
             edelauna/goose-dind:${{ github.ref_name }}
             edelauna/goose-dind:latest
@@ -125,6 +163,8 @@ jobs:
           context: ./mcp-xai
           platforms: linux/amd64,linux/arm64
           push: true
+          cache-from: type=gha,scope=mcp-xai
+          cache-to: type=gha,mode=max,scope=mcp-xai
           tags: |
             edelauna/mcp-xai:${{ github.ref_name }}
             edelauna/mcp-xai:latest

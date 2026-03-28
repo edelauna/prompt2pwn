@@ -12,6 +12,14 @@ HOST_UID=$(stat -c '%u' /workspace)
 HOST_GID=$(stat -c '%g' /workspace)
 echo "Running goose as UID ${HOST_UID}:${HOST_GID} to match host"
 
+SUPP_GROUPS="${HOST_GID}"
+if [ -S /var/run/docker.sock ]; then
+    DOCKER_SOCK_GID=$(stat -c '%g' /var/run/docker.sock)
+    if [ -n "$DOCKER_SOCK_GID" ] && [ "$DOCKER_SOCK_GID" != "$HOST_GID" ]; then
+        SUPP_GROUPS="${HOST_GID},${DOCKER_SOCK_GID}"
+    fi
+fi
+
 if [ -n "$GOOSE_LAUNCH_FILE" ]; then
     FULLPATH="/workspace/$GOOSE_LAUNCH_FILE"
     CONTEXT="$(dirname "$FULLPATH")"
@@ -37,12 +45,17 @@ fi
 if [ "$TOOL" = "claude" ]; then
   mkdir -p /home/goose/.local /home/goose/.cache /home/goose/.claude
   chown -R ${HOST_UID}:${HOST_GID} /home/goose/.local /home/goose/.cache /home/goose/.claude
+elif [ "$TOOL" = "codex" ]; then
+  mkdir -p /home/goose/.cache /home/goose/.codex
+  chown -R ${HOST_UID}:${HOST_GID} /home/goose/.cache /home/goose/.codex
 else
   chown -R ${HOST_UID}:${HOST_GID} /home/goose/.config/goose
 fi
 
 if [ "$TOOL" = "claude" ]; then
-  exec setpriv --reuid ${HOST_UID} --regid ${HOST_GID} --clear-groups claude "$@"
+  exec setpriv --reuid ${HOST_UID} --regid ${HOST_GID} --groups ${SUPP_GROUPS} claude "$@"
+elif [ "$TOOL" = "codex" ]; then
+  exec setpriv --reuid ${HOST_UID} --regid ${HOST_GID} --groups ${SUPP_GROUPS} codex "$@"
 else
-  exec setpriv --reuid ${HOST_UID} --regid ${HOST_GID} --clear-groups goose "$@"
+  exec setpriv --reuid ${HOST_UID} --regid ${HOST_GID} --groups ${SUPP_GROUPS} goose "$@"
 fi

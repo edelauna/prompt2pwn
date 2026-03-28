@@ -145,3 +145,44 @@ export async function setupMcpEnv(
 
   return { xaiKey, sourcegraphToken };
 }
+
+export async function setupCodexEnv(
+  root: string,
+  configDir: string,
+  skipOptionalPrompts = false,
+) {
+  const env1 = await loadEnvFile(".env");
+  const env2 = await loadEnvFile(join(root, ".env"));
+  const env3 = await loadEnvFile(join(configDir, ".env"));
+  const env: Record<string, string> = { ...env3, ...env2, ...env1 };
+
+  const { xaiKey, sourcegraphToken } = await setupMcpEnv(
+    root,
+    configDir,
+    skipOptionalPrompts,
+  );
+
+  let openAiApiKey = env["OPENAI_API_KEY"] || Deno.env.get("OPENAI_API_KEY");
+  if (!openAiApiKey && !skipOptionalPrompts) {
+    const wantOpenAi = await Confirm.prompt({
+      message:
+        "Configure OPENAI_API_KEY for Codex CLI? (optional, skip to use codex login)",
+      default: false,
+    });
+    if (wantOpenAi) {
+      openAiApiKey = await Input.prompt({
+        message: "Please enter your OPENAI_API_KEY:",
+      });
+      if (!openAiApiKey) {
+        ux.error("OPENAI_API_KEY is required.");
+        Deno.exit(1);
+      }
+    }
+  }
+
+  return {
+    xaiKey,
+    sourcegraphToken,
+    openAiApiKey,
+  };
+}

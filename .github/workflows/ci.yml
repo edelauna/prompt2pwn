@@ -22,7 +22,7 @@ jobs:
       - name: Coverage
         run: |
           mkdir -p coverage
-          deno coverage cov_profile --exclude='src/(recipes|claude|env)\.ts' --lcov --output=coverage/lcov.info
+          deno coverage cov_profile --exclude='src/(recipes|claude|codex|env|launch)\.ts' --lcov --output=coverage/lcov.info
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-lcov
@@ -90,7 +90,7 @@ jobs:
         run: deno task start preflight
       - name: Compile and run launch
         run: |
-          script -q -c "deno task compile:linux && mv out/prompt2pwn prompt2pwn-linux-amd64 && ./prompt2pwn-linux-amd64 launch --yes --no-priv info"
+          script -q -c "deno task compile:linux && mv out/prompt2pwn prompt2pwn-linux-amd64 && ./prompt2pwn-linux-amd64 launch --yes --no-priv info && ./prompt2pwn-linux-amd64 launch --tool codex --yes --no-priv -- --version"
 
   docker-release:
     needs: [test, compile]

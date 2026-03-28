@@ -33,6 +33,7 @@ export function buildLaunchCmd(
   workspacePath: string,
   volumeName: string,
   claudeVolumeName: string,
+  codexVolumeName: string,
   dockerCacheVol: string,
   envPath: string,
   image: string,
@@ -60,6 +61,9 @@ export function buildLaunchCmd(
   if (tool === "claude") {
     baseCmd.push("-e", "TOOL=claude");
     baseCmd.push("-v", `${claudeVolumeName}:/home/goose`);
+  } else if (tool === "codex") {
+    baseCmd.push("-e", "TOOL=codex");
+    baseCmd.push("-v", `${codexVolumeName}:/home/goose`);
   } else {
     baseCmd.push("-v", `${volumeName}:/home/goose/.config/goose`);
   }

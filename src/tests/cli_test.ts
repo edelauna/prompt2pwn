@@ -5,6 +5,11 @@ import {
   syncClaudeProjectMcpConfig,
 } from "../claude.ts";
 import {
+  mergeCodexConfig,
+  syncCodexConfigVolume,
+  syncCodexHomeVolume,
+} from "../codex.ts";
+import {
   pullConfigFromVolume as pullGooseConfigFromVolume,
   seedRecipes as seedGooseRecipes,
   syncRecipesToVolume as syncGooseRecipesToVolume,
@@ -224,6 +229,7 @@ Deno.test("buildLaunchCmd - basic command", () => {
     "/workspace",
     "volume",
     "/host/claude",
+    "/host/codex",
     "docker-vol",
     "/env",
     "image",
@@ -263,6 +269,7 @@ Deno.test("buildLaunchCmd - with launch file", () => {
     "/workspace",
     "volume",
     "/host/claude",
+    "/host/codex",
     "docker-vol",
     "/env",
     "image",
@@ -285,6 +292,7 @@ Deno.test("buildLaunchCmd - privileged and no launch file", () => {
     "/workspace",
     "volume",
     "/host/claude",
+    "/host/codex",
     "docker-vol",
     "/env",
     "image",
@@ -353,6 +361,7 @@ Deno.test("buildLaunchCmd - with CTF recipe args", () => {
     "/workspace",
     "volume",
     "/host/claude",
+    "/host/codex",
     "docker-vol",
     "/env",
     "image",
@@ -384,6 +393,7 @@ Deno.test("buildLaunchCmd - claude uses home volume", () => {
     "/workspace",
     "goose-volume",
     "claude-volume",
+    "codex-volume",
     "docker-vol",
     "/env",
     "image",
@@ -392,6 +402,29 @@ Deno.test("buildLaunchCmd - claude uses home volume", () => {
   assertEquals(cmd.includes("goose-volume:/home/goose/.config/goose"), false);
   assertEquals(cmd.includes("claude-volume:/home/goose"), true);
   assertEquals(cmd.includes("TOOL=claude"), true);
+});
+
+Deno.test("buildLaunchCmd - codex uses home volume and default tool env", () => {
+  const options: LaunchOptions = {
+    tool: "codex",
+    noPriv: false,
+    yes: false,
+  };
+  const cmd = buildLaunchCmd(
+    options,
+    "/workspace",
+    "goose-volume",
+    "claude-volume",
+    "codex-volume",
+    "docker-vol",
+    "/env",
+    "image",
+    ["-a", "on-request"],
+  );
+  assertEquals(cmd.includes("goose-volume:/home/goose/.config/goose"), false);
+  assertEquals(cmd.includes("claude-volume:/home/goose"), false);
+  assertEquals(cmd.includes("codex-volume:/home/goose"), true);
+  assertEquals(cmd.includes("TOOL=codex"), true);
 });
 
 Deno.test("mergeClaudeProjectMcpConfig preserves unrelated servers", () => {
@@ -610,6 +643,172 @@ Deno.test("syncClaudeHomeVolume refreshes runtime assets without nesting .local"
     Deno.makeTempDir = originalMakeTempDir;
     Deno.writeTextFile = originalWriteTextFile;
     Deno.remove = originalRemove;
+  }
+});
+
+Deno.test("mergeCodexConfig preserves unrelated config", () => {
+  const merged = mergeCodexConfig(
+    [
+      'model = "gpt-5"',
+      "",
+      '[projects."/other"]',
+      'trust_level = "untrusted"',
+      "",
+      "[mcp_servers.github]",
+      'url = "https://example.com/mcp"',
+    ].join("\n"),
+  );
+
+  assertEquals(merged.includes('model = "gpt-5"'), true);
+  assertEquals(merged.includes('[projects."/other"]'), true);
+  assertEquals(merged.includes('url = "https://example.com/mcp"'), true);
+  assertEquals(merged.includes('[projects."/workspace"]'), true);
+  assertEquals(merged.includes('trust_level = "trusted"'), true);
+});
+
+Deno.test("syncCodexConfigVolume writes managed Codex config", async () => {
+  const originalCommand = Deno.Command;
+  const originalMakeTempDir = Deno.makeTempDir;
+  const originalWriteTextFile = Deno.writeTextFile;
+  const originalRemove = Deno.remove;
+  const writes: Array<{ path: string; content: string }> = [];
+  const commandInvocations: string[][] = [];
+
+  // @ts-ignore
+  Deno.makeTempDir = async () => "/tmp/codex-config";
+  Deno.writeTextFile = async (
+    path: string | URL,
+    content: string | ReadableStream<string>,
+  ) => {
+    writes.push({ path: String(path), content: String(content) });
+  };
+  // @ts-ignore
+  Deno.remove = async () => {};
+
+  // @ts-ignore
+  Deno.Command = class MockCommand {
+    args: string[];
+    constructor(_cmd: string, options: { args: string[] }) {
+      this.args = options.args;
+      commandInvocations.push(options.args);
+    }
+    output() {
+      const shellSnippet = this.args[this.args.length - 1];
+      if (this.args.includes("--entrypoint")) {
+        return Promise.resolve({
+          success: true,
+          stdout: new Uint8Array(),
+          stderr: new Uint8Array(),
+        });
+      }
+      if (
+        typeof shellSnippet === "string" &&
+        shellSnippet.includes("cat /target/.codex/config.toml")
+      ) {
+        return Promise.resolve({
+          success: true,
+          stdout: new TextEncoder().encode(
+            [
+              'model = "gpt-5"',
+              "",
+              "[mcp_servers.github]",
+              'url = "https://example.com/mcp"',
+            ].join("\n"),
+          ),
+          stderr: new Uint8Array(),
+        });
+      }
+      return Promise.resolve({
+        success: true,
+        stdout: new Uint8Array(),
+        stderr: new Uint8Array(),
+      });
+    }
+  };
+
+  try {
+    const configPath = await syncCodexConfigVolume(
+      "codex-configs",
+      "test-image",
+    );
+    assertEquals(configPath, "/target/.codex/config.toml");
+    assertEquals(writes.length >= 1, true);
+    assertEquals(
+      writes.every((entry) => entry.path === "/tmp/codex-config/config.toml"),
+      true,
+    );
+    assertEquals(
+      writes[writes.length - 1].content.includes('[projects."/workspace"]'),
+      true,
+    );
+    assertEquals(
+      commandInvocations.some((args) =>
+        args.includes("--entrypoint") && args.includes("search")
+      ),
+      true,
+    );
+    assertEquals(
+      commandInvocations.some((args) =>
+        args.includes("--entrypoint") && args.includes("playwright")
+      ),
+      true,
+    );
+  } finally {
+    Deno.Command = originalCommand;
+    Deno.makeTempDir = originalMakeTempDir;
+    Deno.writeTextFile = originalWriteTextFile;
+    Deno.remove = originalRemove;
+  }
+});
+
+Deno.test("syncCodexHomeVolume reuses seeded volume when marker matches", async () => {
+  const originalCommand = Deno.Command;
+  const commands: string[][] = [];
+
+  // @ts-ignore
+  Deno.Command = class MockCommand {
+    args: string[];
+    constructor(_cmd: string, options: { args: string[] }) {
+      this.args = options.args;
+      commands.push(options.args);
+    }
+    output() {
+      const lastArg = this.args[this.args.length - 1];
+      if (this.args[0] === "volume" && this.args[1] === "inspect") {
+        return Promise.resolve({
+          success: true,
+          stdout: new Uint8Array(),
+          stderr: new Uint8Array(),
+        });
+      }
+      if (
+        typeof lastArg === "string" && lastArg.includes("codex-seed-version")
+      ) {
+        return Promise.resolve({
+          success: true,
+          stdout: new TextEncoder().encode("seed-v1"),
+          stderr: new Uint8Array(),
+        });
+      }
+      return Promise.resolve({
+        success: true,
+        stdout: new Uint8Array(),
+        stderr: new Uint8Array(),
+      });
+    }
+  };
+
+  try {
+    const result = await syncCodexHomeVolume(
+      "codex-configs",
+      "test-image",
+      "seed-v1",
+    );
+    assertEquals(result, "existing");
+    assertEquals(commands.some((args) => args[0] === "create"), false);
+    assertEquals(commands.some((args) => args[0] === "cp"), false);
+  } finally {
+    Deno.Command = originalCommand;
   }
 });
 

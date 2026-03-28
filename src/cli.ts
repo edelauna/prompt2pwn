@@ -6,8 +6,9 @@ import type { Spinner } from "@std/cli/unstable-spinner";
 import pc from "picocolors";
 
 import { syncClaudeHomeVolume, syncClaudeProjectMcpConfig } from "./claude.ts";
+import { syncCodexConfigVolume, syncCodexHomeVolume } from "./codex.ts";
 import { ux } from "./ux.ts";
-import { loadEnvFile, setupEnv, setupMcpEnv } from "./env.ts";
+import { loadEnvFile, setupCodexEnv, setupEnv, setupMcpEnv } from "./env.ts";
 import { setupConfig } from "./config.ts";
 import { getProviderConfig, type GooseProviderName } from "./providers.ts";
 import { runPreflight } from "./preflight.ts";
@@ -97,6 +98,7 @@ async function orchestrateLaunchPrep(
 
 const VERSION = "1.0.0";
 const CLAUDE_HOME_SEED_VERSION = `${VERSION}-claude-home-v2`;
+const CODEX_HOME_SEED_VERSION = `${VERSION}-codex-home-v1`;
 // Robust root detection: always use project root
 const root = dirname(
   Deno.args.includes("--dev")
@@ -106,6 +108,22 @@ const root = dirname(
 
 function getConfigDir() {
   return join(Deno.env.get("HOME") || ".", ".config/prompt2pwn");
+}
+
+function getCodexDefaultArgs(extraArgs: string[]) {
+  const hasApprovalMode = extraArgs.some((arg) =>
+    arg === "-a" ||
+    arg === "--ask-for-approval" ||
+    arg === "--full-auto" ||
+    arg === "--dangerously-bypass-approvals-and-sandbox"
+  );
+  const hasSandboxMode = extraArgs.some((arg) =>
+    arg === "-s" || arg === "--sandbox"
+  );
+  const defaults: string[] = [];
+  if (!hasApprovalMode) defaults.push("-a", "on-request");
+  if (!hasSandboxMode) defaults.push("-s", "workspace-write");
+  return [...defaults, ...extraArgs];
 }
 
 export async function runCli() {
@@ -129,7 +147,7 @@ export async function runCli() {
     .action(async () => {
       await manageMcpSidecar(configDir, "down");
     })
-    .command("launch", "Launch Goose in Docker")
+    .command("launch", "Launch the selected AI tool in Docker")
     .option(
       "--launch-file <path:string>",
       "Path to goose launch file relative to workspace",
@@ -145,7 +163,10 @@ export async function runCli() {
       "Set Goose provider (xai, google, openai, anthropic)",
     )
     .option("--model <model:string>", "Override Goose model (e.g., gemini-pro)")
-    .option("--tool <tool:string>", "AI tool: goose (default) or claude")
+    .option(
+      "--tool <tool:string>",
+      "AI tool: goose (default), claude, or codex",
+    )
     .arguments("[...extraArgs]")
     .stopEarly()
     .action(async function (opts, ...extraArgs) {
@@ -177,6 +198,8 @@ export async function runCli() {
       let fullExtraArgs: string[];
       if (tool === "claude") {
         fullExtraArgs = allPassthroughArgs;
+      } else if (tool === "codex") {
+        fullExtraArgs = getCodexDefaultArgs(allPassthroughArgs);
       } else {
         fullExtraArgs = await prepareCTFArgs(options, allPassthroughArgs);
       }
@@ -184,8 +207,8 @@ export async function runCli() {
       await ensureDockerCompose(configDir);
       const envPath = join(configDir, ".env");
       const existingEnv = await loadEnvFile(envPath); // Parse existing
-      let providerDisplay = "Claude";
-      let modelDisplay = "Project MCP";
+      let providerDisplay = tool === "codex" ? "OpenAI Codex" : "Claude";
+      let modelDisplay = tool === "codex" ? "Suggest" : "Project MCP";
       let newEnv = { ...existingEnv };
 
       if (tool === "claude") {
@@ -200,6 +223,20 @@ export async function runCli() {
             SOURCEGRAPH_TOKEN: sourcegraphToken,
           }),
           ...(xaiKey && { XAI_API_KEY: xaiKey }),
+        };
+      } else if (tool === "codex") {
+        const { xaiKey, sourcegraphToken, openAiApiKey } = await setupCodexEnv(
+          root,
+          configDir,
+          options.yes,
+        );
+        newEnv = {
+          ...newEnv,
+          ...(sourcegraphToken !== undefined && {
+            SOURCEGRAPH_TOKEN: sourcegraphToken,
+          }),
+          ...(xaiKey && { XAI_API_KEY: xaiKey }),
+          ...(openAiApiKey && { OPENAI_API_KEY: openAiApiKey }),
         };
       } else {
         const envResult = await setupEnv(
@@ -245,6 +282,7 @@ export async function runCli() {
       const stagingPath = join(root, ".goose-staging");
       const volumeName = "goose-configs";
       const claudeVolumeName = `claude-configs`;
+      const codexVolumeName = `codex-configs`;
       const dockerCacheVol = `goose-docker-cache-${basename(workspacePath)}`;
       if (options.launchFile) {
         const fullPath = join(workspacePath, options.launchFile);
@@ -279,8 +317,34 @@ export async function runCli() {
             }
           },
         );
+      } else if (tool === "codex") {
+        await ux.withSpinner(
+          "Preparing Codex volume...",
+          async (spinner: Spinner) => {
+            spinner.message = pc.cyan(`Ensuring volume ${codexVolumeName}...`);
+            const syncState = await syncCodexHomeVolume(
+              codexVolumeName,
+              image,
+              CODEX_HOME_SEED_VERSION,
+            );
+            if (syncState === "created") {
+              spinner.message = pc.cyan("Seeded Codex home runtime assets...");
+            } else if (syncState === "updated") {
+              spinner.message = pc.cyan(
+                "Refreshed Codex home runtime assets...",
+              );
+            } else {
+              spinner.message = pc.cyan("Reusing existing Codex volume...");
+            }
+          },
+        );
+        const codexConfigPath = await syncCodexConfigVolume(
+          codexVolumeName,
+          image,
+        );
+        ux.info(`Updated Codex MCP config at ${codexConfigPath}`);
       }
-      if (tool !== "claude") {
+      if (tool === "goose") {
         await orchestrateLaunchPrep(
           options,
           stagingPath,
@@ -296,7 +360,11 @@ export async function runCli() {
         options,
         workspacePath,
         stagingPath,
-        tool === "claude" ? claudeVolumeName : volumeName,
+        tool === "claude"
+          ? claudeVolumeName
+          : tool === "codex"
+          ? codexVolumeName
+          : volumeName,
         providerDisplay,
         modelDisplay,
       );
@@ -312,6 +380,7 @@ export async function runCli() {
         workspacePath,
         volumeName,
         claudeVolumeName,
+        codexVolumeName,
         dockerCacheVol,
         envPath,
         image,
@@ -329,11 +398,11 @@ export async function runCli() {
       Deno.addSignalListener("SIGTERM", cleanupHandler);
       Deno.addSignalListener("SIGINT", cleanupHandler);
 
-      ux.info("Launching or attaching to Goose Docker container...");
+      ux.info("Launching or attaching to tool container...");
       await runGooseDocker(fullCmd);
 
       // Sync back any configuration changes made during the session
-      if (options.tool !== "claude") {
+      if (tool === "goose") {
         await pullConfigFromVolume(stagingPath, volumeName);
       }
     })

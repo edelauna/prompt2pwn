@@ -27,6 +27,27 @@ export async function loadEnvFile(
   }
 }
 
+export async function promptTunneltoKey(
+  env: Record<string, string>,
+  skipOptionalPrompts = false,
+): Promise<string | undefined> {
+  let tunneltoAuthKey = env["TUNNELTO_AUTH_KEY"] ||
+    Deno.env.get("TUNNELTO_AUTH_KEY");
+  if (!tunneltoAuthKey && !skipOptionalPrompts) {
+    const wantTunnelto = await Confirm.prompt({
+      message:
+        "Configure TUNNELTO_AUTH_KEY for tunnelto tunnel tool? (optional)",
+      default: false,
+    });
+    if (wantTunnelto) {
+      tunneltoAuthKey = await Input.prompt({
+        message: "Enter your TUNNELTO_AUTH_KEY:",
+      });
+    }
+  }
+  return tunneltoAuthKey;
+}
+
 export async function setupEnv(
   root: string,
   configDir: string,
@@ -74,6 +95,8 @@ export async function setupEnv(
     }
   }
 
+  const tunneltoAuthKey = await promptTunneltoKey(env, skipOptionalPrompts);
+
   // Configure Goose provider and model
   const preSetProviderFromEnv =
     (env["GOOSE_PROVIDER"] || Deno.env.get("GOOSE_PROVIDER")) as
@@ -97,6 +120,7 @@ export async function setupEnv(
     model,
     providerApiKey,
     sourcegraphToken,
+    tunneltoAuthKey,
   };
 }
 
@@ -161,6 +185,7 @@ export async function setupCodexEnv(
     configDir,
     skipOptionalPrompts,
   );
+  const tunneltoAuthKey = await promptTunneltoKey(env, skipOptionalPrompts);
 
   let openAiApiKey = env["OPENAI_API_KEY"] || Deno.env.get("OPENAI_API_KEY");
   if (!openAiApiKey && !skipOptionalPrompts) {
@@ -184,5 +209,6 @@ export async function setupCodexEnv(
     xaiKey,
     sourcegraphToken,
     openAiApiKey,
+    tunneltoAuthKey,
   };
 }

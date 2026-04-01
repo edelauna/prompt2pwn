@@ -43,13 +43,29 @@ fi
 
 # Drop privileges (unless called from root) - limits the ability of agents to rewrite network
 if [ "$TOOL" = "claude" ]; then
-  mkdir -p /home/goose/.local /home/goose/.cache /home/goose/.claude
-  chown -R ${HOST_UID}:${HOST_GID} /home/goose/.local /home/goose/.cache /home/goose/.claude
+  mkdir -p /home/goose/.local /home/goose/.cache /home/goose/.claude /home/goose/.npm
+  # Chown home dir itself so the user can create new dirs (e.g. npm cache, node)
+  chown ${HOST_UID}:${HOST_GID} /home/goose
+  # Don't recursively chown .cache — it contains ms-playwright browser binaries (GB of files)
+  # which are already owned by UID 1000 from image seeding and only need to be executable.
+  chown -R ${HOST_UID}:${HOST_GID} /home/goose/.local /home/goose/.claude /home/goose/.npm
+  chown ${HOST_UID}:${HOST_GID} /home/goose/.cache
 elif [ "$TOOL" = "codex" ]; then
   mkdir -p /home/goose/.cache /home/goose/.codex
   chown -R ${HOST_UID}:${HOST_GID} /home/goose/.cache /home/goose/.codex
 else
   chown -R ${HOST_UID}:${HOST_GID} /home/goose/.config/goose
+fi
+
+# Configure tunnelto auth if key is provided (claude and codex only)
+if [ "$TOOL" = "claude" ] || [ "$TOOL" = "codex" ]; then
+  if [ -n "$TUNNELTO_AUTH_KEY" ]; then
+    mkdir -p /home/goose/.tunnelto
+    chown -R ${HOST_UID}:${HOST_GID} /home/goose/.tunnelto
+    setpriv --reuid ${HOST_UID} --regid ${HOST_GID} --groups ${SUPP_GROUPS} \
+      tunnelto set-auth --key "$TUNNELTO_AUTH_KEY" || \
+      echo "Warning: tunnelto set-auth failed, tunnels may not authenticate"
+  fi
 fi
 
 if [ "$TOOL" = "claude" ]; then

@@ -323,6 +323,23 @@ export async function syncCodexHomeVolume(
       );
     }
 
+    const tunneltoCpRes = await new Deno.Command("docker", {
+      args: [
+        "cp",
+        `${tmpName}:/home/goose/.tunnelto`,
+        `${tmpDir}/.tunnelto`,
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    if (!tunneltoCpRes.success) {
+      throw new Error(
+        `docker cp failed for .tunnelto: ${
+          new TextDecoder().decode(tunneltoCpRes.stderr)
+        }`,
+      );
+    }
+
     await Deno.writeTextFile(join(tmpDir, CODEX_HOME_SEED_MARKER), seedVersion);
 
     const volCpRes = await new Deno.Command("docker", {
@@ -340,6 +357,8 @@ export async function syncCodexHomeVolume(
           "mkdir -p /target/.cache /target/.codex",
           "rm -rf /target/.cache/ms-playwright",
           "cp -a /seed/.cache/ms-playwright /target/.cache/ms-playwright",
+          "rm -rf /target/.tunnelto",
+          "cp -a /seed/.tunnelto /target/.tunnelto",
           `cp /seed/${CODEX_HOME_SEED_MARKER} /target/${CODEX_HOME_SEED_MARKER}`,
         ].join(" && "),
       ],

@@ -1,6 +1,6 @@
 import { assertEquals } from "std/assert";
 import { stub } from "@std/testing/mock";
-import { setupEnv, setupMcpEnv, setupCodexEnv } from "./env.ts";
+import { setupCodexEnv, setupEnv, setupMcpEnv } from "./env.ts";
 import { Confirm, Input, Select } from "@cliffy/prompt";
 
 // Use a guaranteed non-existent dir so loadEnvFile returns {} and no real .env

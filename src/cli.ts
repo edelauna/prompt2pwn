@@ -186,7 +186,8 @@ export async function runCli() {
         ux.info("Verbose mode enabled");
         ux.info(`[DEBUG] Full opts: ${JSON.stringify(opts)}`);
         ux.info(
-          `[DEBUG] Provider flag: ${options.provider || "undefined"
+          `[DEBUG] Provider flag: ${
+            options.provider || "undefined"
           }, Model flag: ${options.model || "undefined"}`,
         );
       }
@@ -222,7 +223,10 @@ export async function runCli() {
           configDir,
           options.yes,
         );
-        const tunneltoAuthKey = await promptTunneltoKey(existingEnv, options.yes);
+        const tunneltoAuthKey = await promptTunneltoKey(
+          existingEnv,
+          options.yes,
+        );
         newEnv = {
           ...newEnv,
           ...(sourcegraphToken !== undefined && {
@@ -375,8 +379,8 @@ export async function runCli() {
         tool === "claude"
           ? claudeVolumeName
           : tool === "codex"
-            ? codexVolumeName
-            : volumeName,
+          ? codexVolumeName
+          : volumeName,
         providerDisplay,
         modelDisplay,
       );

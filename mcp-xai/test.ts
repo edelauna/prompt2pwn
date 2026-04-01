@@ -1,4 +1,10 @@
-import { assert } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  CTF_DEFAULT_DOMAINS,
+  CTF_DOMAIN_PRESETS,
+  CTF_RECON_SECTIONS,
+  extractGuideSection,
+} from "./ctf.ts";
 
 async function callXaiApi(
   query: string,
@@ -44,6 +50,78 @@ async function callXaiApi(
 
   return await response.json();
 }
+
+// CTF module tests
+
+Deno.test("extractGuideSection: 'all' returns full guide", () => {
+  const result = extractGuideSection("all");
+  assertStringIncludes(result, "## Minute 0-1");
+  assertStringIncludes(result, "## When You're Stuck");
+  assertStringIncludes(result, "## Reference: Attacker Infrastructure");
+});
+
+Deno.test("extractGuideSection: known phase returns only that section", () => {
+  const result = extractGuideSection("hypothesis");
+  assertStringIncludes(result, "## Minute 5-10");
+  assert(!result.includes("## Minute 0-1"), "Should not include orientation");
+  assert(!result.includes("## Minute 10-15"), "Should not include confirm");
+});
+
+Deno.test("extractGuideSection: 'stuck' section ends before knowledge-base", () => {
+  const result = extractGuideSection("stuck");
+  assertStringIncludes(result, "## When You're Stuck");
+  assert(
+    !result.includes("## Knowledge Base Research"),
+    "Should not bleed into knowledge-base",
+  );
+});
+
+Deno.test("extractGuideSection: unknown phase returns full guide", () => {
+  const result = extractGuideSection("nonexistent");
+  assertStringIncludes(result, "## Minute 0-1");
+  assertStringIncludes(result, "## When You're Stuck");
+});
+
+Deno.test("extractGuideSection: all known phases resolve without fallback", () => {
+  for (const phase of Object.keys(CTF_RECON_SECTIONS)) {
+    const result = extractGuideSection(phase);
+    const heading = CTF_RECON_SECTIONS[phase];
+    assertStringIncludes(
+      result,
+      heading,
+      `Phase '${phase}' should start with its heading`,
+    );
+  }
+});
+
+Deno.test("CTF_DOMAIN_PRESETS: all categories have 3 domains", () => {
+  for (const [category, domains] of Object.entries(CTF_DOMAIN_PRESETS)) {
+    assertEquals(
+      domains.length,
+      3,
+      `Category '${category}' should have 3 domains`,
+    );
+  }
+});
+
+Deno.test("CTF_DOMAIN_PRESETS: payloads includes hacktricks and portswigger", () => {
+  assertStringIncludes(CTF_DOMAIN_PRESETS["payloads"].join(","), "hacktricks");
+  assertStringIncludes(CTF_DOMAIN_PRESETS["payloads"].join(","), "portswigger");
+});
+
+Deno.test("CTF_DOMAIN_PRESETS: cve includes nvd.nist.gov", () => {
+  assert(CTF_DOMAIN_PRESETS["cve"].includes("nvd.nist.gov"));
+});
+
+Deno.test("CTF_DEFAULT_DOMAINS: contains expected CTF knowledge bases", () => {
+  assert(CTF_DEFAULT_DOMAINS.includes("github.com"));
+  assert(CTF_DEFAULT_DOMAINS.includes("book.hacktricks.xyz"));
+  assert(CTF_DEFAULT_DOMAINS.includes("ctftime.org"));
+  assert(CTF_DEFAULT_DOMAINS.includes("nvd.nist.gov"));
+  assert(CTF_DEFAULT_DOMAINS.includes("portswigger.net"));
+});
+
+// callXaiApi tests
 
 Deno.test("callXaiApi constructs correct request", async () => {
   // Mock fetch

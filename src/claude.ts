@@ -26,8 +26,8 @@ export function mergeClaudeProjectMcpConfig(
   existingConfig: Record<string, unknown> = {},
 ): Record<string, unknown> {
   const existingServers = existingConfig.mcpServers &&
-      typeof existingConfig.mcpServers === "object" &&
-      !Array.isArray(existingConfig.mcpServers)
+    typeof existingConfig.mcpServers === "object" &&
+    !Array.isArray(existingConfig.mcpServers)
     ? existingConfig.mcpServers as Record<string, unknown>
     : {};
 
@@ -54,8 +54,7 @@ export async function syncClaudeProjectMcpConfig(projectPath: string) {
   } catch (error) {
     if (!(error instanceof Deno.errors.NotFound)) {
       throw new Error(
-        `Failed to load existing MCP config at ${mcpConfigPath}: ${
-          error instanceof Error ? error.message : String(error)
+        `Failed to load existing MCP config at ${mcpConfigPath}: ${error instanceof Error ? error.message : String(error)
         }`,
       );
     }
@@ -99,8 +98,7 @@ export async function syncClaudeHomeVolume(
     }).output();
     if (!createVolumeRes.success) {
       throw new Error(
-        `docker volume create failed: ${
-          new TextDecoder().decode(createVolumeRes.stderr)
+        `docker volume create failed: ${new TextDecoder().decode(createVolumeRes.stderr)
         }`,
       );
     }
@@ -121,8 +119,7 @@ export async function syncClaudeHomeVolume(
     }).output();
     if (!markerRes.success) {
       throw new Error(
-        `Failed to inspect Claude volume: ${
-          new TextDecoder().decode(markerRes.stderr)
+        `Failed to inspect Claude volume: ${new TextDecoder().decode(markerRes.stderr)
         }`,
       );
     }
@@ -145,7 +142,9 @@ export async function syncClaudeHomeVolume(
       );
     }
 
-    for (const path of [".local", ".cache/ms-playwright"]) {
+    await Deno.mkdir(join(tmpDir, ".cache"), { recursive: true });
+
+    for (const path of [".local", ".cache/ms-playwright", ".tunnelto"]) {
       const cpRes = await new Deno.Command("docker", {
         args: ["cp", `${tmpName}:/home/goose/${path}`, `${tmpDir}/${path}`],
         stdout: "piped",
@@ -153,8 +152,7 @@ export async function syncClaudeHomeVolume(
       }).output();
       if (!cpRes.success) {
         throw new Error(
-          `docker cp failed for ${path}: ${
-            new TextDecoder().decode(cpRes.stderr)
+          `docker cp failed for ${path}: ${new TextDecoder().decode(cpRes.stderr)
           }`,
         );
       }
@@ -182,6 +180,8 @@ export async function syncClaudeHomeVolume(
           "cp -a /seed/.local /target/.local",
           "rm -rf /target/.cache/ms-playwright",
           "cp -a /seed/.cache/ms-playwright /target/.cache/ms-playwright",
+          "rm -rf /target/.tunnelto",
+          "cp -a /seed/.tunnelto /target/.tunnelto",
           `cp /seed/${CLAUDE_HOME_SEED_MARKER} /target/${CLAUDE_HOME_SEED_MARKER}`,
         ].join(" && "),
       ],
@@ -190,8 +190,7 @@ export async function syncClaudeHomeVolume(
     }).output();
     if (!volCpRes.success) {
       throw new Error(
-        `Failed to seed Claude volume: ${
-          new TextDecoder().decode(volCpRes.stderr)
+        `Failed to seed Claude volume: ${new TextDecoder().decode(volCpRes.stderr)
         }`,
       );
     }

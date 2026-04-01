@@ -88,10 +88,10 @@ Deno.test("seedRecipes - always seeds bundled", async () => {
   (Deno as any).readTextFile = async () => "bundled content";
 
   const originalWriteTextFile = Deno.writeTextFile;
-  (Deno as any).writeTextFile = async () => {};
+  (Deno as any).writeTextFile = async () => { };
 
   const originalMkdir = Deno.mkdir;
-  (Deno as any).mkdir = async () => {};
+  (Deno as any).mkdir = async () => { };
 
   try {
     const result = await seedGooseRecipes(stagingPath, rootPath);
@@ -153,10 +153,10 @@ Deno.test("seedRecipes - external recipes", async () => {
   };
 
   const originalCopyFile = Deno.copyFile;
-  (Deno as any).copyFile = async () => {};
+  (Deno as any).copyFile = async () => { };
 
   const originalMkdir = Deno.mkdir;
-  (Deno as any).mkdir = async () => {};
+  (Deno as any).mkdir = async () => { };
 
   try {
     const result = await seedGooseRecipes("/staging", "/root");
@@ -202,8 +202,8 @@ Deno.test("seedRecipes - bundled fallback", async () => {
   };
 
   (Deno as any).readTextFile = async () => "bundled content";
-  (Deno as any).writeTextFile = async () => {};
-  (Deno as any).mkdir = async () => {};
+  (Deno as any).writeTextFile = async () => { };
+  (Deno as any).mkdir = async () => { };
 
   try {
     const result = await seedGooseRecipes("/staging", "/root");
@@ -574,7 +574,7 @@ Deno.test("syncClaudeHomeVolume refreshes runtime assets without nesting .local"
     writes.push({ path: String(path), content: String(content) });
   };
   // @ts-ignore
-  Deno.remove = async () => {};
+  Deno.remove = async () => { };
 
   // @ts-ignore
   Deno.Command = class MockCommand {
@@ -609,6 +609,9 @@ Deno.test("syncClaudeHomeVolume refreshes runtime assets without nesting .local"
       });
     }
   };
+
+  const originalMkdir = Deno.mkdir;
+  (Deno as any).mkdir = async () => { };
 
   try {
     const result = await syncClaudeHomeVolume(
@@ -683,7 +686,7 @@ Deno.test("syncCodexConfigVolume writes managed Codex config", async () => {
     writes.push({ path: String(path), content: String(content) });
   };
   // @ts-ignore
-  Deno.remove = async () => {};
+  Deno.remove = async () => { };
 
   // @ts-ignore
   Deno.Command = class MockCommand {
@@ -830,7 +833,7 @@ Deno.test("syncRecipesToVolume - with config", async () => {
   const originalCommand = Deno.Command;
   (Deno.Command as any) = MockCommand;
   const originalMkdir = Deno.mkdir;
-  (Deno as any).mkdir = async () => {};
+  (Deno as any).mkdir = async () => { };
   // @ts-ignore
   const originalStat = Deno.stat;
   Deno.stat = async (path: any) => {
@@ -901,7 +904,7 @@ Deno.test("syncRecipesToVolume - no config", async () => {
   const originalCommand = Deno.Command;
   (Deno.Command as any) = MockCommand;
   const originalMkdir = Deno.mkdir;
-  (Deno as any).mkdir = async () => {};
+  (Deno as any).mkdir = async () => { };
   // @ts-ignore
   const originalStat = Deno.stat;
   Deno.stat = async (path: any) => {

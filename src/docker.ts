@@ -204,31 +204,30 @@ export async function runGooseDocker(fullCmd: string[]) {
       new TextDecoder().decode(inspectRes.stdout).trim() === "true";
     if (running) {
       ux.info(`Attaching to running Goose container: ${containerName}`);
+      const process = new Deno.Command("docker", {
+        args: ["attach", containerName],
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      const status = await process.output();
+      if (!status.success) {
+        ux.error(`Docker attach failed with code: ${status.code}`);
+        Deno.exit(status.code);
+      }
+      return;
     } else {
-      ux.info(`Starting existing Goose container: ${containerName}`);
+      // Stopped container may lack a PTY or be from an old image — remove and run fresh.
+      ux.info(`Removing stale stopped container: ${containerName}`);
+      await new Deno.Command("docker", {
+        args: ["rm", "-f", containerName],
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
     }
-    const action = running
-      ? ["attach", containerName]
-      : ["start", "-a", "-i", containerName];
-    const process = new Deno.Command("docker", {
-      args: action,
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-    const status = await process.output();
-    if (!status.success) {
-      ux.error(
-        `Docker ${
-          running ? "attach" : "start"
-        } failed with code: ${status.code}`,
-      );
-      Deno.exit(status.code);
-    }
-    return;
-  } else {
-    ux.info(`Starting new Goose container: ${containerName}`);
   }
+
+  ux.info(`Starting new Goose container: ${containerName}`);
 
   // Normal run
   const process = new Deno.Command(fullCmd[0], {

@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y \
     binutils \
     libatomic1 \
     jq \
+    strace \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
@@ -58,9 +59,11 @@ RUN npm install -g @openai/codex @playwright/mcp playwright
 RUN mkdir -p /home/goose/.npm /home/goose/.cache && \
     chown -R goose:goose /home/goose/.npm /home/goose/.cache
 
-# Claude/Codex dirs
-RUN mkdir -p /home/goose/.local/bin /home/goose/.claude /home/goose/.codex && \
-    chown -R goose:goose /home/goose/.local /home/goose/.claude /home/goose/.codex
+# Claude/Codex/tunnelto dirs
+RUN mkdir -p /home/goose/.local/bin /home/goose/.claude /home/goose/.codex \
+             /home/goose/.tunnelto/bin && \
+    chown -R goose:goose /home/goose/.local /home/goose/.claude /home/goose/.codex \
+                         /home/goose/.tunnelto
 
     # Switch to goose user for browser installation
 USER goose
@@ -70,7 +73,11 @@ RUN npx playwright@latest install chromium
 
 # Installing Claude
 RUN curl -fsSL https://claude.ai/install.sh | bash
-ENV PATH="/home/goose/.local/bin:${PATH}"
+
+# Installing tunnelto
+RUN curl -sL https://tunnelto.dev/install.sh | sh
+
+ENV PATH="/home/goose/.local/bin:/home/goose/.tunnelto/bin:${PATH}"
 USER root
 
 # 3. Set home directory

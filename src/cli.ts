@@ -8,7 +8,13 @@ import pc from "picocolors";
 import { syncClaudeHomeVolume, syncClaudeProjectMcpConfig } from "./claude.ts";
 import { syncCodexConfigVolume, syncCodexHomeVolume } from "./codex.ts";
 import { ux } from "./ux.ts";
-import { loadEnvFile, setupCodexEnv, setupEnv, setupMcpEnv } from "./env.ts";
+import {
+  loadEnvFile,
+  promptTunneltoKey,
+  setupCodexEnv,
+  setupEnv,
+  setupMcpEnv,
+} from "./env.ts";
 import { setupConfig } from "./config.ts";
 import { getProviderConfig, type GooseProviderName } from "./providers.ts";
 import { runPreflight } from "./preflight.ts";
@@ -180,8 +186,7 @@ export async function runCli() {
         ux.info("Verbose mode enabled");
         ux.info(`[DEBUG] Full opts: ${JSON.stringify(opts)}`);
         ux.info(
-          `[DEBUG] Provider flag: ${
-            options.provider || "undefined"
+          `[DEBUG] Provider flag: ${options.provider || "undefined"
           }, Model flag: ${options.model || "undefined"}`,
         );
       }
@@ -217,19 +222,22 @@ export async function runCli() {
           configDir,
           options.yes,
         );
+        const tunneltoAuthKey = await promptTunneltoKey(existingEnv, options.yes);
         newEnv = {
           ...newEnv,
           ...(sourcegraphToken !== undefined && {
             SOURCEGRAPH_TOKEN: sourcegraphToken,
           }),
           ...(xaiKey && { XAI_API_KEY: xaiKey }),
+          ...(tunneltoAuthKey && { TUNNELTO_AUTH_KEY: tunneltoAuthKey }),
         };
       } else if (tool === "codex") {
-        const { xaiKey, sourcegraphToken, openAiApiKey } = await setupCodexEnv(
-          root,
-          configDir,
-          options.yes,
-        );
+        const { xaiKey, sourcegraphToken, openAiApiKey, tunneltoAuthKey } =
+          await setupCodexEnv(
+            root,
+            configDir,
+            options.yes,
+          );
         newEnv = {
           ...newEnv,
           ...(sourcegraphToken !== undefined && {
@@ -237,6 +245,7 @@ export async function runCli() {
           }),
           ...(xaiKey && { XAI_API_KEY: xaiKey }),
           ...(openAiApiKey && { OPENAI_API_KEY: openAiApiKey }),
+          ...(tunneltoAuthKey && { TUNNELTO_AUTH_KEY: tunneltoAuthKey }),
         };
       } else {
         const envResult = await setupEnv(
@@ -259,6 +268,9 @@ export async function runCli() {
           SOURCEGRAPH_TOKEN: envResult.sourcegraphToken || "",
           ...(envResult.xaiKey && envResult.provider !== "xai" && {
             XAI_API_KEY: envResult.xaiKey,
+          }),
+          ...(envResult.tunneltoAuthKey && {
+            TUNNELTO_AUTH_KEY: envResult.tunneltoAuthKey,
           }),
           TOOL: tool,
         };
@@ -363,8 +375,8 @@ export async function runCli() {
         tool === "claude"
           ? claudeVolumeName
           : tool === "codex"
-          ? codexVolumeName
-          : volumeName,
+            ? codexVolumeName
+            : volumeName,
         providerDisplay,
         modelDisplay,
       );

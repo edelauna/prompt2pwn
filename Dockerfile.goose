@@ -74,8 +74,13 @@ RUN npx playwright@latest install chromium
 # Installing Claude
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
-# Installing tunnelto
-RUN curl -sL https://tunnelto.dev/install.sh | sh
+# Installing tunnelto (x86_64 only — no arm64 release available)
+RUN arch=$(uname -m) && \
+    if [ "$arch" = "x86_64" ]; then \
+        curl -sL https://tunnelto.dev/install.sh | sh; \
+    else \
+        echo "Skipping tunnelto install: no release for $arch"; \
+    fi
 
 ENV PATH="/home/goose/.local/bin:/home/goose/.tunnelto/bin:${PATH}"
 USER root
